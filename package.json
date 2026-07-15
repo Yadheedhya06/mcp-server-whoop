@@ -1,0 +1,73 @@
+{
+  "name": "mcp-server-whoop",
+  "version": "0.1.0",
+  "description": "Local-first, read-only WHOOP MCP server with secure OAuth and AI-ready health signals",
+  "type": "module",
+  "bin": {
+    "mcp-server-whoop": "dist/index.js"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./server": {
+      "types": "./dist/server.d.ts",
+      "import": "./dist/server.js"
+    },
+    "./whoop": {
+      "types": "./dist/whoop.d.ts",
+      "import": "./dist/whoop.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "SECURITY.md",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "test": "node --test --import tsx test/*.test.ts",
+    "check": "npm run build && npm test",
+    "prepublishOnly": "npm run check"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Yadheedhya06/mcp-server-whoop.git"
+  },
+  "homepage": "https://github.com/Yadheedhya06/mcp-server-whoop#readme",
+  "bugs": {
+    "url": "https://github.com/Yadheedhya06/mcp-server-whoop/issues"
+  },
+  "author": "Yadheedhya06",
+  "license": "MIT",
+  "keywords": [
+    "whoop",
+    "mcp",
+    "model-context-protocol",
+    "health",
+    "fitness",
+    "recovery",
+    "sleep",
+    "hrv",
+    "ai"
+  ]
+}
