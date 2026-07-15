@@ -246,7 +246,7 @@ export class CredentialStore {
     try {
       await this.ensurePrivateDirectory();
       // The complete ancestor chain and private direct parent are validated immediately above.
-      // codeql[js/insecure-temporary-file]
+      // lgtm[js/insecure-temporary-file]
       handle = await open(this.path, constants.O_RDONLY | constants.O_NOFOLLOW);
       const metadata = await this.validateOpenFile(handle, this.path, "credential");
       if (metadata.size > MAX_CREDENTIAL_FILE_BYTES) {
@@ -333,7 +333,7 @@ export class CredentialStore {
       }
 
       // The opened directory must match the already validated private parent by device and inode.
-      // codeql[js/insecure-temporary-file]
+      // lgtm[js/insecure-temporary-file]
       const directory = await open(dirname(this.path), constants.O_RDONLY | constants.O_NOFOLLOW);
       try {
         const descriptorMetadata = await directory.stat();
@@ -364,7 +364,7 @@ export class CredentialStore {
     let lock: OpenHandle | undefined;
     try {
       // Lock storage shares the fully validated private credential parent and is revalidated by inode.
-      // codeql[js/insecure-temporary-file]
+      // lgtm[js/insecure-temporary-file]
       lock = await open(this.lockPath, constants.O_RDONLY | constants.O_NOFOLLOW);
       const metadata = await this.validateOpenFile(lock, this.lockPath, "credential lock");
       if (metadata.size > 256) {

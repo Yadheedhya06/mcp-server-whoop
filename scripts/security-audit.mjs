@@ -161,7 +161,7 @@ const tarballPath = join(root, packed.filename);
 try {
   const listing = execFileSync("tar", ["-tzf", tarballPath], { encoding: "utf8" })
     .trim()
-    .split("\n")
+    .split(/\r?\n/)
     .filter(Boolean)
     .sort();
   const verboseListing = execFileSync("tar", ["-tvzf", tarballPath], { encoding: "utf8" });
@@ -187,7 +187,7 @@ try {
     "npm tarball contains no absolute or traversal paths",
   );
   check(
-    !verboseListing.split("\n").some((line) => /^[lh]/.test(line)),
+    !verboseListing.split(/\r?\n/).some((line) => /^[lh]/.test(line)),
     "npm tarball contains no hard links or symbolic links",
   );
   check(
