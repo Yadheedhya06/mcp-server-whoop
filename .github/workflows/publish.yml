@@ -122,7 +122,7 @@ jobs:
             sleep 6
           done
           npm view "$PACKAGE@$VERSION" dist.attestations --json | tee npm-attestations.json
-          node -e "const a=require('./npm-attestations.json'); if(!a || !a.provenance || !a.provenance.url) process.exit(1)"
+          node -e "const a=require('./npm-attestations.json'); if(!a || typeof a.url !== 'string' || !a.url || a.provenance?.predicateType !== 'https://slsa.dev/provenance/v1') process.exit(1)"
 
       - name: Attach independently verifiable evidence to the GitHub release
         env:
