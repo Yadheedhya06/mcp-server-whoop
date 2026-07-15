@@ -1,8 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, stat } from "node:fs/promises";
+import { chmod, link, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as wait } from "node:timers/promises";
 import { CredentialStore } from "../src/config.js";
 
 test("CredentialStore persists only to a private file and directory", async () => {
@@ -21,6 +22,98 @@ test("CredentialStore persists only to a private file and directory", async () =
   assert.equal((await stat(join(root, "nested"))).mode & 0o777, 0o700);
 });
 
+test("CredentialStore self-heals an overly broad credential-file mode", async () => {
+  const root = await mkdtemp(join(tmpdir(), "whoop-mode-"));
+  const path = join(root, "credentials.json");
+  await writeFile(path, '{"accessToken":"value"}\n', { mode: 0o644 });
+  await chmod(path, 0o644);
+  const store = new CredentialStore(path);
+  assert.equal((await store.loadFile()).accessToken, "value");
+  if (process.platform !== "win32") {
+    assert.equal((await stat(path)).mode & 0o777, 0o600);
+  }
+});
+
+test("CredentialStore rejects credential-file symlinks", async (context) => {
+  if (process.platform === "win32") {
+    context.skip("symlink permissions differ on Windows");
+    return;
+  }
+  const root = await mkdtemp(join(tmpdir(), "whoop-symlink-"));
+  const target = join(root, "target.json");
+  const link = join(root, "credentials.json");
+  await writeFile(target, '{"accessToken":"must-not-load"}\n', { mode: 0o600 });
+  await symlink(target, link);
+  const store = new CredentialStore(link);
+  await assert.rejects(store.loadFile(), /regular file, not a symlink/);
+  await assert.rejects(store.update({ accessToken: "replacement" }), /regular file, not a symlink/);
+  assert.equal(await readFile(target, "utf8"), '{"accessToken":"must-not-load"}\n');
+});
+
+test("CredentialStore rejects a shared parent instead of changing its permissions", async (context) => {
+  if (process.platform === "win32") {
+    context.skip("POSIX permission checks do not apply on Windows");
+    return;
+  }
+  const root = await mkdtemp(join(tmpdir(), "whoop-parent-mode-"));
+  const shared = join(root, "shared");
+  await mkdir(shared, { mode: 0o755 });
+  await chmod(shared, 0o755);
+  const store = new CredentialStore(join(shared, "credentials.json"));
+  await writeFile(store.path, '{"accessToken":"value"}\n', { mode: 0o600 });
+  await assert.rejects(
+    store.loadFile(),
+    /parent directory must not be accessible/,
+  );
+  await assert.rejects(
+    store.update({ accessToken: "value" }),
+    /parent directory must not be accessible/,
+  );
+  assert.equal((await stat(shared)).mode & 0o777, 0o755);
+});
+
+test("CredentialStore rejects multiply linked credential files", async (context) => {
+  if (process.platform === "win32") {
+    context.skip("hard-link behavior differs on Windows");
+    return;
+  }
+  const root = await mkdtemp(join(tmpdir(), "whoop-hardlink-"));
+  const target = join(root, "target.json");
+  const path = join(root, "credentials.json");
+  await writeFile(target, '{"accessToken":"must-not-load"}\n', { mode: 0o600 });
+  await link(target, path);
+  await assert.rejects(
+    new CredentialStore(path).loadFile(),
+    /multiple links/,
+  );
+});
+
+test("CredentialStore rejects oversized files and fields", async () => {
+  const root = await mkdtemp(join(tmpdir(), "whoop-size-"));
+  const path = join(root, "credentials.json");
+  const store = new CredentialStore(path);
+  await writeFile(path, `{"accessToken":"${"a".repeat(70 * 1024)}"}`, { mode: 0o600 });
+  await assert.rejects(store.loadFile(), /exceeds the 64 KiB safety limit/);
+  await assert.rejects(
+    store.update({ accessToken: "a".repeat(17 * 1024) }),
+    /invalid or oversized fields/,
+  );
+});
+
+test("CredentialStore rejects unknown fields and non-string credential values", async () => {
+  const root = await mkdtemp(join(tmpdir(), "whoop-shape-"));
+  const path = join(root, "credentials.json");
+  const store = new CredentialStore(path);
+  for (const value of [
+    '["access-token"]',
+    '{"accessToken":123}',
+    '{"accessToken":"ok","unexpected":"field"}',
+  ]) {
+    await writeFile(path, `${value}\n`, { mode: 0o600 });
+    await assert.rejects(store.loadFile(), /only documented, bounded string fields/);
+  }
+});
+
 test("CredentialStore serializes concurrent updates without losing token rotation", async () => {
   const root = await mkdtemp(join(tmpdir(), "whoop-lock-"));
   const store = new CredentialStore(join(root, "credentials.json"));
@@ -36,6 +129,40 @@ test("CredentialStore serializes concurrent updates without losing token rotatio
   const loaded = await store.loadFile();
   assert.equal(loaded.accessToken, "access-new");
   assert.equal(loaded.refreshToken, "refresh-new");
+});
+
+test("CredentialStore reclaims a lock owned by a dead process without waiting for timeout", async () => {
+  const root = await mkdtemp(join(tmpdir(), "whoop-dead-lock-"));
+  const path = join(root, "credentials.json");
+  const store = new CredentialStore(path);
+  await store.update({ accessToken: "initial" });
+  await writeFile(`${path}.lock`, `2147483647:${"d".repeat(32)}\n`, { mode: 0o600 });
+  const started = Date.now();
+  const result = await store.withLock(async () => "acquired");
+  assert.equal(result, "acquired");
+  assert.ok(Date.now() - started < 2_000);
+  await assert.rejects(readFile(`${path}.lock`, "utf8"), (error: unknown) =>
+    (error as NodeJS.ErrnoException).code === "ENOENT",
+  );
+});
+
+test("CredentialStore does not reclaim a fresh lock with a partial owner token", async () => {
+  const root = await mkdtemp(join(tmpdir(), "whoop-partial-lock-"));
+  const path = join(root, "credentials.json");
+  const store = new CredentialStore(path);
+  await store.update({ accessToken: "initial" });
+  const lockPath = `${path}.lock`;
+  await writeFile(lockPath, `${process.pid}:partial`, { mode: 0o600 });
+
+  let entered = false;
+  const pending = store.withLock(async () => {
+    entered = true;
+    return "acquired";
+  });
+  await wait(200);
+  assert.equal(entered, false);
+  await rm(lockPath);
+  assert.equal(await pending, "acquired");
 });
 
 test("persisted rotated credentials take precedence over bootstrap environment values", async () => {

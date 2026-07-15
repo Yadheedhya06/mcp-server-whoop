@@ -1,0 +1,141 @@
+name: Publish verified release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+  artifact-metadata: write
+
+concurrency:
+  group: publish-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == 'Yadheedhya06/mcp-server-whoop'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out the immutable release tag
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          persist-credentials: false
+
+      - name: Set up Node.js for npm trusted publishing
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24.18.0
+          registry-url: https://registry.npmjs.org
+          cache: npm
+
+      - name: Install the trusted-publishing-capable npm CLI
+        run: npm install --global npm@11.18.0 --ignore-scripts
+
+      - name: Install locked dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts
+
+      - name: Validate tag and package version
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "require('./package.json').version")"
+          test "$RELEASE_TAG" = "v$VERSION"
+          test "$(node -p "require('./server.json').version")" = "$VERSION"
+
+      - name: Run all release gates
+        run: npm run check
+
+      - name: Pack the release artifact exactly once
+        id: pack
+        run: |
+          set -euo pipefail
+          npm pack --json > pack-result.json
+          TARBALL="$(node -e "const p=require('./pack-result.json'); if(p.length!==1||!p[0].filename) process.exit(1); process.stdout.write(p[0].filename)")"
+          test -f "$TARBALL"
+          echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
+          sha256sum "$TARBALL" | tee "$TARBALL.sha256"
+
+      - name: Generate and validate the CycloneDX production SBOM
+        env:
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+        run: |
+          set -euo pipefail
+          npm sbom --sbom-format=cyclonedx --omit=dev > "$TARBALL.cdx.json"
+          node - "$TARBALL.cdx.json" <<'NODE'
+          const fs = require('node:fs');
+          const sbom = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          const pkg = require('./package.json');
+          if (sbom.bomFormat !== 'CycloneDX') throw new Error('Expected CycloneDX SBOM');
+          if (sbom.metadata?.component?.name !== pkg.name) throw new Error('SBOM package name mismatch');
+          if (sbom.metadata?.component?.version !== pkg.version) throw new Error('SBOM package version mismatch');
+          if (!Array.isArray(sbom.components) || sbom.components.length === 0) throw new Error('SBOM has no components');
+          NODE
+
+      - name: Cryptographically bind the exact tarball to its CycloneDX SBOM
+        id: attest_sbom
+        uses: actions/attest@c32b4b8b198b65d0bd9d63490e847ff7b53989d4 # v4.0.0
+        with:
+          subject-path: ${{ steps.pack.outputs.tarball }}
+          sbom-path: ${{ steps.pack.outputs.tarball }}.cdx.json
+
+      - name: Verify the GitHub SBOM attestation before publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+        run: >-
+          gh attestation verify "$TARBALL"
+          --repo "$GITHUB_REPOSITORY"
+          --predicate-type https://cyclonedx.org/bom
+
+      - name: Publish the exact attested tarball with npm provenance
+        env:
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+        run: |
+          set -euo pipefail
+          PACKAGE="$(node -p "require('./package.json').name")"
+          VERSION="$(node -p "require('./package.json').version")"
+          LOCAL_SHA1="$(sha1sum "$TARBALL" | cut -d' ' -f1)"
+          if REMOTE_SHA1="$(npm view "$PACKAGE@$VERSION" dist.shasum --json 2>/dev/null | tr -d '\"\n')" && test -n "$REMOTE_SHA1"; then
+            test "$REMOTE_SHA1" = "$LOCAL_SHA1"
+            echo "The registry already contains this exact tarball; skipping duplicate publication."
+          else
+            npm publish "$TARBALL" --access public --provenance
+          fi
+
+      - name: Verify the registry received the exact tarball and provenance
+        env:
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+        run: |
+          set -euo pipefail
+          PACKAGE="$(node -p "require('./package.json').name")"
+          VERSION="$(node -p "require('./package.json').version")"
+          LOCAL_SHA1="$(sha1sum "$TARBALL" | cut -d' ' -f1)"
+          for attempt in 1 2 3 4 5; do
+            REMOTE_SHA1="$(npm view "$PACKAGE@$VERSION" dist.shasum --json 2>/dev/null | tr -d '\"\n' || true)"
+            test "$REMOTE_SHA1" = "$LOCAL_SHA1" && break
+            test "$attempt" -lt 5
+            sleep 6
+          done
+          npm view "$PACKAGE@$VERSION" dist.attestations --json | tee npm-attestations.json
+          node -e "const a=require('./npm-attestations.json'); if(!a || !a.provenance || !a.provenance.url) process.exit(1)"
+
+      - name: Attach independently verifiable evidence to the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          ATTESTATION_BUNDLE: ${{ steps.attest_sbom.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          gh release upload "$RELEASE_TAG" \
+            "$TARBALL" \
+            "$TARBALL.sha256" \
+            "$TARBALL.cdx.json" \
+            "$ATTESTATION_BUNDLE" \
+            --clobber

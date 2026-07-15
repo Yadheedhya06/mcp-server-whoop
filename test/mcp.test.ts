@@ -78,9 +78,20 @@ test("MCP exposes five read-only tools and blocks stale recovery substitution", 
     client.connect(clientTransport),
   ]);
   const listed = await client.listTools();
-  assert.equal(listed.tools.length, 5);
+  assert.deepEqual(
+    listed.tools.map((tool) => tool.name).sort(),
+    [
+      "whoop_cycle_strain_history",
+      "whoop_latest_overview",
+      "whoop_recovery_history",
+      "whoop_sleep_history",
+      "whoop_workout_history",
+    ],
+  );
   assert.ok(listed.tools.every((tool) => tool.annotations?.readOnlyHint));
   assert.ok(listed.tools.every((tool) => tool.annotations?.destructiveHint === false));
+  assert.ok(listed.tools.every((tool) => tool.annotations?.idempotentHint));
+  assert.ok(listed.tools.every((tool) => tool.annotations?.openWorldHint));
 
   const response = await client.callTool({
     name: "whoop_latest_overview",

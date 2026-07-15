@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import * as z from "zod/v4";
 import {
@@ -14,6 +15,8 @@ import type {
   WorkoutRecord,
 } from "./types.js";
 
+const packageVersion = (createRequire(import.meta.url)("../package.json") as { version: string })
+  .version;
 const recordSchema = z.record(z.string(), z.unknown());
 const rangeInput = {
   days: z
@@ -84,7 +87,7 @@ function recentActivities(sleeps: SleepRecord[], workouts: WorkoutRecord[]) {
 
 export function createWhoopServer(client = new WhoopClient()): McpServer {
   const server = new McpServer(
-    { name: "mcp-server-whoop", version: "0.1.0" },
+    { name: "mcp-server-whoop", version: packageVersion },
     {
       instructions:
         "Read-only access to the user's live WHOOP data. Timestamps are already converted using each record's local offset; never convert them again. Treat processing data as unfinished and never substitute an older recovery for the newest sleep. Activity types identify sleep, nap, and workout sport, but WHOOP does not reveal whether an activity was auto-detected or manually started. Actual sleep is light + slow-wave + REM, not time in bed. Use these signals as coaching context, not medical diagnosis.",

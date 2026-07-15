@@ -2,6 +2,8 @@
 
 [![npm version](https://img.shields.io/npm/v/mcp-server-whoop.svg)](https://www.npmjs.com/package/mcp-server-whoop)
 [![CI](https://github.com/Yadheedhya06/mcp-server-whoop/actions/workflows/ci.yml/badge.svg)](https://github.com/Yadheedhya06/mcp-server-whoop/actions/workflows/ci.yml)
+[![CodeQL and secrets](https://github.com/Yadheedhya06/mcp-server-whoop/actions/workflows/security.yml/badge.svg)](https://github.com/Yadheedhya06/mcp-server-whoop/actions/workflows/security.yml)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/Yadheedhya06/mcp-server-whoop/badge)](https://scorecard.dev/viewer/?uri=github.com/Yadheedhya06/mcp-server-whoop)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 A local-first, read-only [Model Context Protocol](https://modelcontextprotocol.io/) server for WHOOP. It gives MCP-compatible AI clients compact recovery, sleep, strain, HRV, heart-rate, workout, and body-measurement signals without sending your WHOOP credentials through a hosted third party.
@@ -16,6 +18,8 @@ A local-first, read-only [Model Context Protocol](https://modelcontextprotocol.i
 - Explicit `processing` status, with no older recovery substituted while a new sleep is pending
 - Human-scale hours, minutes, calories, and heart-rate-zone minutes
 - No raw identifiers, OAuth secrets, or raw continuous heart-rate claims in tool output
+- No hosted relay, telemetry, database, generic HTTP tool, raw SQL, or install lifecycle scripts
+- Reproducible tarball security audit, CycloneDX SBOM, CodeQL, Gitleaks, dependency review, and OpenSSF Scorecard
 
 > This is an independent community project. It is not affiliated with or endorsed by WHOOP. WHOOP data is useful coaching context, not medical advice.
 
@@ -25,6 +29,19 @@ A local-first, read-only [Model Context Protocol](https://modelcontextprotocol.i
 - A WHOOP account
 - A free application in the [WHOOP Developer Dashboard](https://developer.whoop.com/dashboard/)
 - An MCP-compatible AI client
+
+## Quick start
+
+1. Create a WHOOP developer application and register `http://127.0.0.1:8765/callback`.
+2. Enable the five read scopes and `offline` listed below.
+3. Run `npx -y mcp-server-whoop@latest auth` in a terminal and approve WHOOP access.
+4. Run `npx -y mcp-server-whoop@latest status` to confirm the local grant exists.
+5. Add the stdio command `npx -y mcp-server-whoop@latest` to your AI client's MCP configuration.
+6. Restart or reload the client, then ask: `Use WHOOP to summarize my recovery and sleep from the last 7 days.`
+
+The authorization command and the AI client must run as the same operating-system user, or both must set `WHOOP_CREDENTIALS_FILE` to the same private file. The package never asks you to paste WHOOP tokens into an AI conversation.
+
+For reproducible or security-sensitive deployments, replace `@latest` with an exact reviewed version such as `@0.2.0`. `@latest` is convenient but automatically follows future releases.
 
 ## 1. Create your WHOOP application
 
@@ -67,6 +84,14 @@ The directory is forced to mode `0700` and the file to `0600`. Override the path
 
 For headless environments, provide `WHOOP_CLIENT_ID`, `WHOOP_CLIENT_SECRET`, and optionally `WHOOP_REDIRECT_URI` as environment variables before running `auth`.
 
+The OAuth callback still needs to reach the machine running `auth`. When authorizing over SSH, create a loopback tunnel from your workstation first:
+
+```bash
+ssh -L 8765:127.0.0.1:8765 user@your-server
+```
+
+Then run `auth` in that SSH session and open its printed WHOOP URL in your workstation browser. Do not pass the client secret as a command-line argument because shell history and process listings may expose it.
+
 Check setup without displaying secrets:
 
 ```bash
@@ -85,6 +110,8 @@ Revoking access in WHOOP account settings is also recommended when you no longer
 
 ### Claude Desktop
 
+Add this under `mcpServers` in Claude Desktop's configuration, then fully restart Claude Desktop:
+
 ```json
 {
   "mcpServers": {
@@ -96,18 +123,52 @@ Revoking access in WHOOP account settings is also recommended when you no longer
 }
 ```
 
-### Cursor, Windsurf, VS Code, and other JSON-based clients
+### Claude Code
 
-Use the same command and arguments:
+```bash
+claude mcp add --transport stdio whoop -- npx -y mcp-server-whoop@latest
+```
+
+### Cursor, Windsurf, Gemini Code Assist, and other `mcpServers` clients
+
+Add the server to the client's MCP JSON. Gemini Code Assist uses `~/.gemini/settings.json`; other clients choose their own settings path.
 
 ```json
 {
-  "command": "npx",
-  "args": ["-y", "mcp-server-whoop@latest"]
+  "mcpServers": {
+    "whoop": {
+      "command": "npx",
+      "args": ["-y", "mcp-server-whoop@latest"]
+    }
+  }
+}
+```
+
+### VS Code
+
+Create `.vscode/mcp.json` for a project, or use VS Code's **MCP: Add Server** command:
+
+```json
+{
+  "servers": {
+    "whoop": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "mcp-server-whoop@latest"]
+    }
+  }
 }
 ```
 
 ### Codex
+
+Either run:
+
+```bash
+codex mcp add whoop -- npx -y mcp-server-whoop@latest
+```
+
+Or add this to `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.whoop]
@@ -117,7 +178,36 @@ args = ["-y", "mcp-server-whoop@latest"]
 
 ### ChatGPT
 
-ChatGPT does not directly launch a local stdio command. Run this package behind an MCP-compatible secure tunnel or remote bridge, then create a developer plugin using that tunnel. The MCP server itself requires no additional auth because WHOOP OAuth is handled locally by this package.
+Local Codex and ChatGPT desktop clients that support stdio can use the Codex configuration above. ChatGPT web does not launch a command on your computer; it requires a separately secured remote bridge or tunnel and a workspace plugin. This repository intentionally does not ship or operate a public health-data relay.
+
+Client menus and configuration paths change over time. If a client supports standard local stdio MCP, the portable values are always:
+
+```text
+command: npx
+arguments: -y mcp-server-whoop@latest
+```
+
+## Confirm the connection
+
+After restarting the client, confirm that it discovers exactly these five tools:
+
+```text
+whoop_latest_overview
+whoop_recovery_history
+whoop_sleep_history
+whoop_cycle_strain_history
+whoop_workout_history
+```
+
+Useful prompts:
+
+- `Use WHOOP to review today's recovery, latest sleep, current strain, and latest workout.`
+- `Compare my recovery, HRV, and resting heart rate over the last 14 days.`
+- `Show my last 7 days of sleep, including naps, and flag anything still processing.`
+- `Summarize my workout strain and heart-rate zones for the last 30 days.`
+- `Use WHOOP as context for today's training, but do not treat it as medical advice.`
+
+The model decides when to call tools, so explicitly say `Use WHOOP` when you want live data rather than a general answer.
 
 ## Tools
 
@@ -130,6 +220,20 @@ ChatGPT does not directly launch a local stdio command. Run this package behind 
 | `whoop_workout_history` | Sport, duration, strain, HR, calories, distance, and zone minutes |
 
 All tools are marked read-only, non-destructive, and idempotent.
+
+### Why deliberately only five tools?
+
+For a health-data MCP, a larger tool count also means a larger capability surface. This server keeps authentication outside the agent and gives the model only the five health-reading capabilities it needs.
+
+It intentionally has:
+
+- no WHOOP write, revoke, token-management, or authorization-code tools
+- no profile/email/name scope
+- no raw-record, raw-ID, arbitrary endpoint, SQL, file, or shell tool
+- no hosted OAuth relay, telemetry service, health-data cache, or database
+- no stale-recovery fallback when the newest sleep is still processing
+
+The goal is not maximum WHOOP API coverage. It is the smallest practical authority boundary for recovery-aware AI.
 
 ## Data semantics
 
@@ -171,12 +275,38 @@ An older recovery is never presented as current.
 
 Client configuration from `WHOOP_CLIENT_ID`, `WHOOP_CLIENT_SECRET`, and `WHOOP_REDIRECT_URI` overrides file values. Token environment variables can bootstrap a headless setup, but once a refresh token rotates, the newer token persisted in the credential file takes precedence. Do not put secrets directly in command-line arguments or commit them to source control.
 
+## Troubleshooting
+
+### `Missing WHOOP ...`
+
+Run `npx -y mcp-server-whoop@latest status` as the same OS user that launches the AI client. If the credentials are elsewhere, set `WHOOP_CREDENTIALS_FILE` in the client's MCP environment.
+
+### WHOOP reports a redirect mismatch
+
+The redirect in the Developer Dashboard and the value used by this package must match exactly. The default is `http://127.0.0.1:8765/callback`, including scheme, host, port, and path.
+
+### The browser does not open
+
+Copy the authorization URL printed in the terminal and open it manually. The callback listener expires after five minutes; rerun `auth` if needed.
+
+### Port `8765` is already in use
+
+Register another loopback URL such as `http://127.0.0.1:9876/callback`, set `WHOOP_REDIRECT_URI` to that exact value, and rerun `auth`.
+
+### Recovery is `null`
+
+Check the returned `status.state`. If it is `waiting_for_whoop` or `waiting_for_recovery`, WHOOP has not finished scoring the newest sleep. The server intentionally refuses to label an older recovery as current; retry after WHOOP finishes processing.
+
+### The client shows no tools
+
+Run `npx -y mcp-server-whoop@latest --help` in a terminal to verify Node.js and npm can launch the package, then restart the AI client and inspect its MCP logs. Do not run the bare server interactively to inspect output: stdio is reserved for MCP protocol messages.
+
 ## Development
 
 ```bash
 git clone git@github.com:Yadheedhya06/mcp-server-whoop.git
 cd mcp-server-whoop
-npm install
+npm ci --ignore-scripts
 npm run check
 ```
 
@@ -194,12 +324,19 @@ npm pack --dry-run
 
 ## Privacy and security
 
-See [SECURITY.md](SECURITY.md). In short:
+This project publishes evidence rather than claiming that any package is perfectly safe. See the full [security policy](SECURITY.md) and [reproducible security evidence](SECURITY-EVIDENCE.md).
 
 - Every user owns their WHOOP developer app and OAuth grant.
 - Credentials stay local and are never returned through MCP tools.
-- Refreshes use bounded timeouts, a shared lock, atomic persistence, and restrictive permissions.
-- The package provides no WHOOP write or mutation tools.
+- The package provides no WHOOP write, generic network, shell, filesystem, or raw API passthrough tool.
+- The credential file and its direct parent are checked against symlinks, unsafe permissions, oversized input, and unexpected fields. Refresh rotation uses a crash-aware lock, exclusive temporary file, atomic replacement, and disk sync.
+- WHOOP and OAuth responses are size-bounded and structurally validated; provider response bodies are never copied into MCP errors.
+- Direct dependencies use exact versions. There are only two direct runtime dependencies and no package install lifecycle scripts.
+- CI runs the test suite on Node 18, 20, 22, and 24, scans the exact npm tarball, verifies npm registry signatures, and generates a CycloneDX SBOM.
+- Independent workflows run CodeQL, Gitleaks, dependency review, and OpenSSF Scorecard.
+- The publish workflow packs once and publishes that exact tarball through npm Trusted Publishing with Sigstore provenance. GitHub separately attests that tarball against its CycloneDX SBOM; no long-lived npm token is used.
+
+These controls reduce risk, but they are not a paid penetration test or a guarantee. The limitations are documented explicitly in `SECURITY-EVIDENCE.md`.
 
 ## License
 

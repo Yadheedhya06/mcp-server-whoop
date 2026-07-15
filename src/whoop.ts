@@ -14,6 +14,9 @@ const DEFAULT_TOKEN_URL = "https://api.prod.whoop.com/oauth/oauth2/token";
 const TOKEN_REFRESH_SKEW_MS = 5 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 20_000;
 const MAX_RATE_LIMIT_WAIT_MS = 10_000;
+const MAX_API_RESPONSE_BYTES = 2 * 1024 * 1024;
+const MAX_TOKEN_RESPONSE_BYTES = 64 * 1024;
+const MAX_NEXT_TOKEN_BYTES = 4 * 1024;
 const wait = (milliseconds: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 
@@ -58,18 +61,108 @@ function retryAfterMilliseconds(response: Response): number {
 }
 
 function asHours(milliseconds: number | undefined): number | undefined {
-  if (milliseconds === undefined) return undefined;
+  if (typeof milliseconds !== "number" || !Number.isFinite(milliseconds) || milliseconds < 0) return undefined;
   return Math.round((milliseconds / 3_600_000) * 100) / 100;
 }
 
 function asMinutes(milliseconds: number | undefined): number | undefined {
-  if (milliseconds === undefined) return undefined;
+  if (typeof milliseconds !== "number" || !Number.isFinite(milliseconds) || milliseconds < 0) return undefined;
   return Math.round((milliseconds / 60_000) * 10) / 10;
 }
 
 function asKilocalories(kilojoules: number | undefined): number | undefined {
-  if (kilojoules === undefined) return undefined;
+  if (typeof kilojoules !== "number" || !Number.isFinite(kilojoules) || kilojoules < 0) return undefined;
   return Math.round(kilojoules / 4.184);
+}
+
+function finiteBetween(value: number | undefined, minimum: number, maximum: number): number | undefined {
+  return Number.isFinite(value) && (value as number) >= minimum && (value as number) <= maximum
+    ? value
+    : undefined;
+}
+
+function safeLabel(value: string | undefined): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const cleaned = value.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").replace(/\s+/g, " ").trim();
+  return cleaned ? Array.from(cleaned).slice(0, 100).join("") : undefined;
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function boundedString(value: unknown, maximum = 16 * 1024): value is string {
+  return typeof value === "string" && Buffer.byteLength(value, "utf8") <= maximum;
+}
+
+function validTimestamp(value: unknown): value is string {
+  return boundedString(value, 128) && value.length > 0 && Number.isFinite(Date.parse(value));
+}
+
+function validOffset(value: unknown): value is string {
+  return boundedString(value, 16) && offsetMinutes(value) !== undefined;
+}
+
+async function readBoundedJson(response: Response, limit: number, label: string): Promise<unknown> {
+  const declared = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > limit) {
+    await response.body?.cancel();
+    throw new Error(`${label} exceeded the response size limit`);
+  }
+  if (!response.body) throw new Error(`${label} returned an empty response`);
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > limit) {
+        await reader.cancel();
+        throw new Error(`${label} exceeded the response size limit`);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown;
+  } catch {
+    throw new Error(`${label} returned invalid JSON`);
+  }
+}
+
+function validTokenResponse(value: unknown): value is OAuthTokenResponse {
+  if (!isObject(value) || !boundedString(value.access_token) || value.access_token.length === 0) return false;
+  if (value.refresh_token !== undefined && !boundedString(value.refresh_token)) return false;
+  if (value.token_type !== undefined && !boundedString(value.token_type, 128)) return false;
+  if (value.scope !== undefined && !boundedString(value.scope, 2_048)) return false;
+  const expires = value.expires_in === undefined ? 3_600 : Number(value.expires_in);
+  return Number.isFinite(expires) && expires > 0 && expires <= 31_536_000;
+}
+
+function validRecovery(value: unknown): value is RecoveryRecord {
+  return isObject(value) && boundedString(value.sleep_id, 512) && value.sleep_id.length > 0 && validTimestamp(value.created_at) && boundedString(value.score_state, 64);
+}
+
+function validSleep(value: unknown): value is SleepRecord {
+  return isObject(value) && boundedString(value.id, 512) && value.id.length > 0 && validTimestamp(value.start) && validTimestamp(value.end) && validOffset(value.timezone_offset) && typeof value.nap === "boolean" && boundedString(value.score_state, 64);
+}
+
+function validCycle(value: unknown): value is CycleRecord {
+  return isObject(value) && validTimestamp(value.start) && (value.end === undefined || value.end === null || validTimestamp(value.end)) && validOffset(value.timezone_offset) && boundedString(value.score_state, 64);
+}
+
+function validWorkout(value: unknown): value is WorkoutRecord {
+  return isObject(value) && validTimestamp(value.start) && validTimestamp(value.end) && validOffset(value.timezone_offset) && boundedString(value.sport_name, 1_024) && boundedString(value.score_state, 64);
 }
 
 function scoreStatus(
@@ -85,7 +178,12 @@ function offsetMinutes(offset: string): number | undefined {
   if (offset === "Z") return 0;
   const match = offset.match(/^([+-])(\d{2}):(\d{2})$/);
   if (!match) return undefined;
-  const minutes = Number(match[2]) * 60 + Number(match[3]);
+  const hours = Number(match[2]);
+  const remainder = Number(match[3]);
+  if (hours > 14 || remainder > 59 || (hours === 14 && remainder !== 0)) {
+    return undefined;
+  }
+  const minutes = hours * 60 + remainder;
   return match[1] === "+" ? minutes : -minutes;
 }
 
@@ -98,6 +196,7 @@ export function localDateTime(
   const minutes = offsetMinutes(offset);
   if (!Number.isFinite(timestampMs) || minutes === undefined) return undefined;
   const local = new Date(timestampMs + minutes * 60_000);
+  if (!Number.isFinite(local.getTime())) return undefined;
   const dateTime = local.toISOString().slice(0, 19).replace("T", " ");
   return `${dateTime} ${offset === "Z" ? "+00:00" : offset}`;
 }
@@ -159,7 +258,7 @@ export class WhoopClient {
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
         headers: {
           "Content-Type": "application/x-www-form-urlencoded",
-          "User-Agent": "mcp-server-whoop/0.1",
+          "User-Agent": "mcp-server-whoop",
         },
         body: new URLSearchParams({
           grant_type: "refresh_token",
@@ -170,14 +269,19 @@ export class WhoopClient {
         }),
       });
       if (!response.ok) {
-        const detail = (await response.text()).slice(0, 300);
-        throw new Error(`WHOOP token refresh failed (${response.status}): ${detail}`);
+        await response.body?.cancel();
+        throw new Error(`WHOOP token refresh failed (${response.status})`);
       }
-      const tokens = (await response.json()) as OAuthTokenResponse;
-      if (!tokens.access_token) {
-        throw new Error("WHOOP token refresh returned no access token");
+      const tokenPayload = await readBoundedJson(
+        response,
+        MAX_TOKEN_RESPONSE_BYTES,
+        "WHOOP token refresh",
+      );
+      if (!validTokenResponse(tokenPayload)) {
+        throw new Error("WHOOP token refresh returned an invalid token response");
       }
-      const expiresIn = Number(tokens.expires_in || 3600);
+      const tokens = tokenPayload;
+      const expiresIn = Number(tokens.expires_in ?? 3600);
       await this.store.update({
         accessToken: tokens.access_token,
         refreshToken: tokens.refresh_token || credentials.refreshToken,
@@ -206,63 +310,101 @@ export class WhoopClient {
         headers: {
           Authorization: `Bearer ${token}`,
           Accept: "application/json",
-          "User-Agent": "mcp-server-whoop/0.1",
+          "User-Agent": "mcp-server-whoop",
         },
       });
-      if (response.ok) return (await response.json()) as T;
+      if (response.ok) {
+        return (await readBoundedJson(response, MAX_API_RESPONSE_BYTES, "WHOOP API")) as T;
+      }
       if (response.status === 401 && !authenticationRetried) {
+        await response.body?.cancel();
         authenticationRetried = true;
         token = await this.accessToken(token);
         continue;
       }
       if (response.status === 429 && !rateLimitRetried) {
+        await response.body?.cancel();
         rateLimitRetried = true;
         await wait(retryAfterMilliseconds(response));
         continue;
       }
-      const detail = (await response.text()).slice(0, 300);
-      throw new Error(`WHOOP API failed (${response.status}): ${detail}`);
+      await response.body?.cancel();
+      throw new Error(`WHOOP API failed (${response.status})`);
     }
     throw new Error("WHOOP API retry limit exceeded");
   }
 
-  private async collection<T>(endpoint: string, days: number): Promise<T[]> {
-    const safeDays = Math.max(1, Math.min(180, Math.floor(days)));
+  private async collection<T>(
+    endpoint: string,
+    days: number,
+    label: string,
+    validator: (value: unknown) => value is T,
+  ): Promise<T[]> {
+    const safeDays = Number.isFinite(days)
+      ? Math.max(1, Math.min(180, Math.floor(days)))
+      : 1;
     const now = this.now();
     const records: T[] = [];
     let nextToken: string | undefined;
+    const seenTokens = new Set<string>();
     for (let page = 0; page < 100; page += 1) {
-      const response = await this.getJson<PaginatedResponse<T>>(endpoint, {
+      const response = await this.getJson<PaginatedResponse<unknown>>(endpoint, {
         start: startDate(now, safeDays),
         end: now.toISOString(),
         limit: 25,
         nextToken,
       });
-      records.push(...(response.records || []));
-      nextToken = response.next_token;
+      if (
+        !isObject(response) ||
+        !Array.isArray(response.records) ||
+        !response.records.every(validator)
+      ) {
+        throw new Error(`WHOOP API returned invalid ${label} data`);
+      }
+      records.push(...response.records);
+      if (
+        response.next_token !== undefined &&
+        (!boundedString(response.next_token, MAX_NEXT_TOKEN_BYTES) || !response.next_token)
+      ) {
+        throw new Error("WHOOP API returned an invalid pagination token");
+      }
+      nextToken = response.next_token as string | undefined;
       if (!nextToken) return records;
+      if (seenTokens.has(nextToken)) {
+        throw new Error("WHOOP API repeated a pagination token");
+      }
+      seenTokens.add(nextToken);
     }
     throw new Error("WHOOP pagination exceeded the 100-page safety limit");
   }
 
   recoveries(days: number): Promise<RecoveryRecord[]> {
-    return this.collection<RecoveryRecord>("/recovery", days);
+    return this.collection<RecoveryRecord>("/recovery", days, "recovery", validRecovery);
   }
 
   sleeps(days: number): Promise<SleepRecord[]> {
-    return this.collection<SleepRecord>("/activity/sleep", days);
+    return this.collection<SleepRecord>("/activity/sleep", days, "sleep", validSleep);
   }
 
   cycles(days: number): Promise<CycleRecord[]> {
-    return this.collection<CycleRecord>("/cycle", days);
+    return this.collection<CycleRecord>("/cycle", days, "cycle", validCycle);
   }
 
   workouts(days: number): Promise<WorkoutRecord[]> {
-    return this.collection<WorkoutRecord>("/activity/workout", days);
+    return this.collection<WorkoutRecord>("/activity/workout", days, "workout", validWorkout);
   }
 
-  bodyMeasurement(): Promise<BodyMeasurement> {
-    return this.getJson<BodyMeasurement>("/user/measurement/body");
+  async bodyMeasurement(): Promise<BodyMeasurement> {
+    const body = await this.getJson<unknown>("/user/measurement/body");
+    if (
+      !isObject(body) ||
+      finiteBetween(body.height_meter as number | undefined, 0.3, 3) === undefined ||
+      finiteBetween(body.weight_kilogram as number | undefined, 1, 1_000) === undefined ||
+      finiteBetween(body.max_heart_rate as number | undefined, 1, 300) === undefined
+    ) {
+      throw new Error("WHOOP API returned invalid body measurement data");
+    }
+    return body as unknown as BodyMeasurement;
   }
 }
 
@@ -274,29 +416,44 @@ export function formatRecovery(record: RecoveryRecord, sleep?: SleepRecord) {
       ? localDateTime(sleep.end, sleep.timezone_offset)
       : undefined,
     processing_status: scoreStatus(record.score_state),
-    recovery_score_percent: score?.recovery_score,
-    hrv_rmssd_ms: score?.hrv_rmssd_milli,
-    resting_heart_rate_bpm: score?.resting_heart_rate,
-    spo2_percent: score?.spo2_percentage,
-    skin_temperature_celsius: score?.skin_temp_celsius,
-    user_calibrating: score?.user_calibrating,
+    recovery_score_percent: finiteBetween(score?.recovery_score, 0, 100),
+    hrv_rmssd_ms: finiteBetween(score?.hrv_rmssd_milli, 0, 10_000),
+    resting_heart_rate_bpm: finiteBetween(score?.resting_heart_rate, 1, 300),
+    spo2_percent: finiteBetween(score?.spo2_percentage, 0, 100),
+    skin_temperature_celsius: finiteBetween(score?.skin_temp_celsius, 20, 50),
+    user_calibrating:
+      typeof score?.user_calibrating === "boolean" ? score.user_calibrating : undefined,
   });
 }
 
 export function formatSleep(record: SleepRecord) {
   const score = record.score;
   const stages = score?.stage_summary;
-  const actualSleepMs = stages
-    ? stages.total_light_sleep_time_milli +
-      stages.total_slow_wave_sleep_time_milli +
-      stages.total_rem_sleep_time_milli
+  const sleepParts = stages
+    ? [
+        stages.total_light_sleep_time_milli,
+        stages.total_slow_wave_sleep_time_milli,
+        stages.total_rem_sleep_time_milli,
+      ]
+    : undefined;
+  const actualSleepMs = sleepParts?.every(
+    (value) => Number.isFinite(value) && value >= 0,
+  )
+    ? sleepParts.reduce((total, value) => total + value, 0)
     : undefined;
   const needed = score?.sleep_needed;
-  const totalNeededMs = needed
-    ? needed.baseline_milli +
-      needed.need_from_sleep_debt_milli +
-      needed.need_from_recent_strain_milli +
-      needed.need_from_recent_nap_milli
+  const neededParts = needed
+    ? [
+        needed.baseline_milli,
+        needed.need_from_sleep_debt_milli,
+        needed.need_from_recent_strain_milli,
+        needed.need_from_recent_nap_milli,
+      ]
+    : undefined;
+  const totalNeededMs = neededParts?.every(
+    (value) => Number.isFinite(value) && value >= 0,
+  )
+    ? neededParts.reduce((total, value) => total + value, 0)
     : undefined;
   return pickDefined({
     activity_type: record.nap ? "nap" : "sleep",
@@ -310,12 +467,12 @@ export function formatSleep(record: SleepRecord) {
     light_sleep_hours: asHours(stages?.total_light_sleep_time_milli),
     slow_wave_sleep_hours: asHours(stages?.total_slow_wave_sleep_time_milli),
     rem_sleep_hours: asHours(stages?.total_rem_sleep_time_milli),
-    sleep_performance_percent: score?.sleep_performance_percentage,
-    sleep_efficiency_percent: score?.sleep_efficiency_percentage,
-    sleep_consistency_percent: score?.sleep_consistency_percentage,
-    respiratory_rate: score?.respiratory_rate,
-    disturbances: stages?.disturbance_count,
-    sleep_cycles: stages?.sleep_cycle_count,
+    sleep_performance_percent: finiteBetween(score?.sleep_performance_percentage, 0, 100),
+    sleep_efficiency_percent: finiteBetween(score?.sleep_efficiency_percentage, 0, 100),
+    sleep_consistency_percent: finiteBetween(score?.sleep_consistency_percentage, 0, 100),
+    respiratory_rate: finiteBetween(score?.respiratory_rate, 1, 100),
+    disturbances: finiteBetween(stages?.disturbance_count, 0, 10_000),
+    sleep_cycles: finiteBetween(stages?.sleep_cycle_count, 0, 1_000),
     sleep_needed_hours: asHours(totalNeededMs),
   });
 }
@@ -328,41 +485,46 @@ export function formatCycle(record: CycleRecord) {
     start_local: localDateTime(record.start, record.timezone_offset),
     end_local: localDateTime(record.end, record.timezone_offset),
     processing_status: scoreStatus(record.score_state),
-    strain: score?.strain,
+    strain: finiteBetween(score?.strain, 0, 21),
     calories_kcal: asKilocalories(score?.kilojoule),
-    average_heart_rate_bpm: score?.average_heart_rate,
-    max_heart_rate_bpm: score?.max_heart_rate,
+    average_heart_rate_bpm: finiteBetween(score?.average_heart_rate, 1, 300),
+    max_heart_rate_bpm: finiteBetween(score?.max_heart_rate, 1, 300),
     is_current_cycle: !record.end,
   });
 }
 
 export function formatWorkout(record: WorkoutRecord) {
   const score = record.score;
-  const durationMs = Math.max(0, Date.parse(record.end) - Date.parse(record.start));
+  const parsedDuration = Date.parse(record.end) - Date.parse(record.start);
+  const durationMs = Number.isFinite(parsedDuration) && parsedDuration >= 0
+    ? parsedDuration
+    : undefined;
   const zones = score?.zone_durations;
+  const zoneMinutes = zones
+    ? pickDefined({
+        zone_0: asMinutes(zones.zone_zero_milli),
+        zone_1: asMinutes(zones.zone_one_milli),
+        zone_2: asMinutes(zones.zone_two_milli),
+        zone_3: asMinutes(zones.zone_three_milli),
+        zone_4: asMinutes(zones.zone_four_milli),
+        zone_5: asMinutes(zones.zone_five_milli),
+      })
+    : undefined;
   return pickDefined({
     activity_type: "workout",
-    sport: record.sport_name,
+    sport: safeLabel(record.sport_name),
     date_local: localDate(record.start, record.timezone_offset),
     start_local: localDateTime(record.start, record.timezone_offset),
     end_local: localDateTime(record.end, record.timezone_offset),
     duration_minutes: asMinutes(durationMs),
     processing_status: scoreStatus(record.score_state),
-    strain: score?.strain,
-    average_heart_rate_bpm: score?.average_heart_rate,
-    max_heart_rate_bpm: score?.max_heart_rate,
+    strain: finiteBetween(score?.strain, 0, 21),
+    average_heart_rate_bpm: finiteBetween(score?.average_heart_rate, 1, 300),
+    max_heart_rate_bpm: finiteBetween(score?.max_heart_rate, 1, 300),
     calories_kcal: asKilocalories(score?.kilojoule),
-    heart_rate_data_recorded_percent: score?.percent_recorded,
-    distance_meters: score?.distance_meter,
-    heart_rate_zone_minutes: zones
-      ? {
-          zone_0: asMinutes(zones.zone_zero_milli),
-          zone_1: asMinutes(zones.zone_one_milli),
-          zone_2: asMinutes(zones.zone_two_milli),
-          zone_3: asMinutes(zones.zone_three_milli),
-          zone_4: asMinutes(zones.zone_four_milli),
-          zone_5: asMinutes(zones.zone_five_milli),
-        }
-      : undefined,
+    heart_rate_data_recorded_percent: finiteBetween(score?.percent_recorded, 0, 100),
+    distance_meters: finiteBetween(score?.distance_meter, 0, 1_000_000_000),
+    heart_rate_zone_minutes:
+      zoneMinutes && Object.keys(zoneMinutes).length > 0 ? zoneMinutes : undefined,
   });
 }
