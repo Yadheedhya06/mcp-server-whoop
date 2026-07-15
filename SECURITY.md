@@ -21,8 +21,8 @@ Include the affected version, reproduction steps, impact, and any suggested fix.
 - No WHOOP mutation, generic HTTP, shell, filesystem, raw SQL, or raw API passthrough tool.
 - No telemetry, analytics, or health-record cache.
 - Credentials are excluded from MCP tool inputs and outputs.
-- Local token rotation is locked and persisted atomically. The default credential parent directory is current-user-owned and created as `0700`, and the credential file is a current-user-owned `0600` regular file.
-- Credential-file symlinks, multiple hard links, and file swaps between path validation and open are rejected.
+- On Linux and macOS, local token rotation uses a PID-independent heartbeat lease and atomic persistence. Every credential-path ancestor is checked; the direct parent is current-user-owned `0700`, and the credential file is a single-link current-user-owned `0600` regular file.
+- Credential-path symlinks, unsafe ancestors, multiple hard links, and file swaps between path validation and open are rejected. Native Windows credential persistence fails closed; only a short-lived access token supplied through the process environment is supported there.
 - Requests have bounded timeouts and bounded authentication/rate-limit retries.
 - WHOOP response bodies are not reflected in AI-visible errors.
 

@@ -38,6 +38,36 @@ jobs:
       - name: Build, test, and audit packed artifact
         run: npm run check
 
+  platform-security:
+    name: Platform security (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, windows-2022]
+    steps:
+      - name: Check out source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install without lifecycle scripts
+        run: npm ci --ignore-scripts
+      - name: Run full macOS release checks
+        if: runner.os == 'macOS'
+        run: npm run check
+      - name: Build and audit the Windows runtime
+        if: runner.os == 'Windows'
+        run: |
+          npm run build
+          node --test --import tsx test/auth.test.ts test/windows-security.test.ts
+          npm run security:audit
+
   supply-chain:
     name: Supply-chain evidence
     runs-on: ubuntu-latest

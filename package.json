@@ -1,6 +1,6 @@
 {
   "name": "mcp-server-whoop",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "mcpName": "io.github.Yadheedhya06/mcp-server-whoop",
   "description": "Local-first, read-only WHOOP MCP server with secure OAuth and AI-ready health signals",
   "type": "module",
@@ -34,7 +34,7 @@
     "server.json"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
     "test": "node --test --import tsx test/*.test.ts",
