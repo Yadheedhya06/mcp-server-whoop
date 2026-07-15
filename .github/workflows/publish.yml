@@ -5,10 +5,7 @@ on:
     types: [published]
 
 permissions:
-  contents: write
-  id-token: write
-  attestations: write
-  artifact-metadata: write
+  contents: read
 
 concurrency:
   group: publish-${{ github.event.release.tag_name }}
@@ -19,6 +16,11 @@ jobs:
     if: github.repository == 'Yadheedhya06/mcp-server-whoop'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     steps:
       - name: Check out the immutable release tag
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -32,9 +34,6 @@ jobs:
           node-version: 24.18.0
           registry-url: https://registry.npmjs.org
           cache: npm
-
-      - name: Install the trusted-publishing-capable npm CLI
-        run: npm install --global npm@11.18.0 --ignore-scripts
 
       - name: Install locked dependencies without lifecycle scripts
         run: npm ci --ignore-scripts
