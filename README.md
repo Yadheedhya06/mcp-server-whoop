@@ -169,7 +169,7 @@ An older recovery is never presented as current.
 | `WHOOP_REFRESH_TOKEN` | Optional refresh-token override |
 | `WHOOP_TOKEN_EXPIRES_AT` | Optional ISO token-expiry override |
 
-Environment variables override values read from the credential file. Do not put secrets directly in command-line arguments or commit them to source control.
+Client configuration from `WHOOP_CLIENT_ID`, `WHOOP_CLIENT_SECRET`, and `WHOOP_REDIRECT_URI` overrides file values. Token environment variables can bootstrap a headless setup, but once a refresh token rotates, the newer token persisted in the credential file takes precedence. Do not put secrets directly in command-line arguments or commit them to source control.
 
 ## Development
 
