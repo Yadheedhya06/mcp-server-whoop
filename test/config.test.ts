@@ -1,8 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { chmod, link, mkdir, mkdtemp, readFile, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, link, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as wait } from "node:timers/promises";
 import { CredentialStore } from "../src/config.js";
 
 test("CredentialStore persists only to a private file and directory", async () => {
@@ -135,7 +136,7 @@ test("CredentialStore reclaims a lock owned by a dead process without waiting fo
   const path = join(root, "credentials.json");
   const store = new CredentialStore(path);
   await store.update({ accessToken: "initial" });
-  await writeFile(`${path}.lock`, "2147483647:dead-owner\n", { mode: 0o600 });
+  await writeFile(`${path}.lock`, `2147483647:${"d".repeat(32)}\n`, { mode: 0o600 });
   const started = Date.now();
   const result = await store.withLock(async () => "acquired");
   assert.equal(result, "acquired");
@@ -143,6 +144,25 @@ test("CredentialStore reclaims a lock owned by a dead process without waiting fo
   await assert.rejects(readFile(`${path}.lock`, "utf8"), (error: unknown) =>
     (error as NodeJS.ErrnoException).code === "ENOENT",
   );
+});
+
+test("CredentialStore does not reclaim a fresh lock with a partial owner token", async () => {
+  const root = await mkdtemp(join(tmpdir(), "whoop-partial-lock-"));
+  const path = join(root, "credentials.json");
+  const store = new CredentialStore(path);
+  await store.update({ accessToken: "initial" });
+  const lockPath = `${path}.lock`;
+  await writeFile(lockPath, `${process.pid}:partial`, { mode: 0o600 });
+
+  let entered = false;
+  const pending = store.withLock(async () => {
+    entered = true;
+    return "acquired";
+  });
+  await wait(200);
+  assert.equal(entered, false);
+  await rm(lockPath);
+  assert.equal(await pending, "acquired");
 });
 
 test("persisted rotated credentials take precedence over bootstrap environment values", async () => {

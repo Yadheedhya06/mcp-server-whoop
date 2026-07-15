@@ -6,7 +6,7 @@ All notable changes to this project will be documented here.
 
 ### Security hardening
 
-- Added a reproducible 210-check package/source audit and expanded the behavioral suite to 25 tests.
+- Added a reproducible 210-check package/source audit and expanded the behavioral suite to 26 tests.
 - Added CodeQL, Gitleaks, dependency review, OpenSSF Scorecard, CycloneDX SBOM, signature verification, and SHA-pinned CI workflows.
 - Added an npm trusted-publishing workflow with Sigstore provenance plus a GitHub SBOM attestation bound to the exact npm tarball, without a long-lived npm token.
 - Hardened OAuth with 256-bit generated state, constant-time state checks, strict loopback callback validation, bounded token responses, and no-cache callback responses.

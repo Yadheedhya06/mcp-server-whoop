@@ -37,7 +37,6 @@ const MAX_CREDENTIAL_FIELD_BYTES = 16 * 1024;
 const LOCK_WAIT_MS = 50;
 const LOCK_TIMEOUT_MS = 10_000;
 const STALE_LOCK_MS = 30_000;
-const MAX_ACTIVE_LOCK_MS = 5 * 60_000;
 const NO_FOLLOW = process.platform === "win32" ? 0 : (constants.O_NOFOLLOW ?? 0);
 const currentUid = process.platform === "win32" ? undefined : process.getuid?.();
 const wait = (milliseconds: number) =>
@@ -245,6 +244,7 @@ export class CredentialStore {
   async withLock<T>(operation: () => Promise<T>): Promise<T> {
     const started = Date.now();
     const owner = `${process.pid}:${randomBytes(16).toString("hex")}`;
+    let ownedHandle: Awaited<ReturnType<typeof open>> | undefined;
     await this.ensurePrivateDirectory();
     while (true) {
       let handle;
@@ -256,7 +256,7 @@ export class CredentialStore {
         );
         await handle.writeFile(`${owner}\n`, "utf8");
         await handle.sync();
-        await handle.close();
+        ownedHandle = handle;
         handle = undefined;
         break;
       } catch (error) {
@@ -273,7 +273,8 @@ export class CredentialStore {
             await lock.close();
           }
           const age = Date.now() - metadata.mtimeMs;
-          const ownerPid = Number(currentOwner.split(":", 1)[0]);
+          const ownerMatch = currentOwner.match(/^([1-9][0-9]{0,14}):[a-f0-9]{32}$/);
+          const ownerPid = ownerMatch ? Number(ownerMatch[1]) : Number.NaN;
           let ownerAlive = false;
           if (Number.isSafeInteger(ownerPid) && ownerPid > 0) {
             try {
@@ -283,7 +284,7 @@ export class CredentialStore {
               ownerAlive = (processError as NodeJS.ErrnoException).code === "EPERM";
             }
           }
-          if ((!ownerAlive && age >= 0) || age > MAX_ACTIVE_LOCK_MS || (!currentOwner && age > STALE_LOCK_MS)) {
+          if ((ownerMatch && !ownerAlive && age >= 0) || (!ownerMatch && age > STALE_LOCK_MS)) {
             await rm(this.lockPath, { force: true });
             continue;
           }
@@ -301,19 +302,12 @@ export class CredentialStore {
     try {
       return await operation();
     } finally {
-      let handle;
       try {
-        // lgtm[js/file-system-race] The lock is inside a verified current-user-owned 0700
-        // directory. A process able to swap it already has direct access to this user's
-        // credential file, so same-UID lock tampering is outside the credential boundary.
-        handle = await open(this.lockPath, constants.O_RDONLY | NO_FOLLOW);
-        const currentOwner = (await handle.readFile("utf8")).trim();
-        await handle.close();
-        handle = undefined;
-        if (currentOwner === owner) await rm(this.lockPath, { force: true });
+        await ownedHandle?.close();
       } catch (error) {
-        await handle?.close();
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      } finally {
+        if (ownedHandle) await rm(this.lockPath, { force: true });
       }
     }
   }
