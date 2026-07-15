@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented here.
 
+## 0.2.1 - 2026-07-16
+
+### Security
+
+- Fails closed for persistent credentials on native Windows instead of treating POSIX file modes as Windows ACL protection; short-lived environment access tokens remain supported.
+- Rejects symlinks and unsafe ownership or write permissions across the full credential ancestor chain on supported POSIX systems.
+- Replaces PID-liveness locks with heartbeat leases, preventing PID reuse from indefinitely blocking token refresh and preventing an owner from deleting a replaced lock.
+- Clean-builds `dist`, removes source maps from the package, audits compiled JavaScript and the exact packed runtime, and verifies that packed runtime files are byte-identical to the audited build.
+- Pins installation examples to an exact package version by default and documents Windows and plaintext-storage limitations precisely.
+- Adds native Windows and macOS security CI coverage.
+
 ## 0.2.0 - 2026-07-15
 
 ### Security hardening

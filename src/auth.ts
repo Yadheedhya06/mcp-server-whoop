@@ -219,33 +219,47 @@ const callbackHeaders = (contentType: string) => ({
   "X-Content-Type-Options": "nosniff",
 });
 
-export async function authorize(store = new CredentialStore()): Promise<void> {
-  const existing = await store.load();
-  const clientId =
-    existing.clientId || (await promptText("WHOOP client ID: "));
-  const clientSecret =
-    existing.clientSecret || (await promptSecret("WHOOP client secret: "));
-  if (!clientId || !clientSecret) {
-    throw new Error("WHOOP client ID and client secret are required");
-  }
-  const redirectUri = existing.redirectUri || DEFAULT_REDIRECT_URI;
-  const redirect = validateLocalRedirectUri(redirectUri);
-  const port = Number(redirect.port);
-  const state = randomBytes(32).toString("base64url");
-  const authorizationUrl = createAuthorizationUrl({ clientId, redirectUri, state });
+export interface OAuthCallbackOptions {
+  redirectUri: string;
+  state: string;
+  timeoutMs?: number;
+  onListening?: () => void;
+}
 
-  const code = await new Promise<string>((resolve, reject) => {
+export async function waitForOAuthCallback(options: OAuthCallbackOptions): Promise<string> {
+  const redirect = validateLocalRedirectUri(options.redirectUri);
+  const port = Number(redirect.port);
+  return new Promise<string>((resolve, reject) => {
+    let settled = false;
+    let requestCount = 0;
+    const finish = (error?: Error, code?: string): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      if (server.listening) server.close();
+      if (error) reject(error);
+      else resolve(code as string);
+    };
     const timeout = setTimeout(() => {
-      server.close();
-      reject(new Error("WHOOP authorization timed out after five minutes"));
-    }, 300_000);
+      finish(new Error("WHOOP authorization timed out after five minutes"));
+    }, options.timeoutMs ?? 300_000);
     const server = createServer((request, response) => {
+      requestCount += 1;
+      if (requestCount > 32) {
+        response.writeHead(429, callbackHeaders("text/plain; charset=utf-8")).end("Too many requests");
+        finish(new Error("WHOOP authorization received too many invalid callback requests"));
+        return;
+      }
+      if (request.headers.host !== redirect.host) {
+        response.writeHead(400, callbackHeaders("text/plain; charset=utf-8")).end("Invalid host");
+        return;
+      }
       if (request.method !== "GET") {
         response.writeHead(405, { ...callbackHeaders("text/plain; charset=utf-8"), Allow: "GET" });
         response.end("Method not allowed");
         return;
       }
-      const requestUrl = new URL(request.url || "/", redirectUri);
+      const requestUrl = new URL(request.url || "/", options.redirectUri);
       if (requestUrl.pathname !== redirect.pathname) {
         response.writeHead(404, callbackHeaders("text/plain; charset=utf-8")).end("Not found");
         return;
@@ -253,17 +267,15 @@ export async function authorize(store = new CredentialStore()): Promise<void> {
       const returnedState = requestUrl.searchParams.get("state");
       const error = requestUrl.searchParams.get("error");
       const authorizationCode = requestUrl.searchParams.get("code");
-      if (!safeEqual(returnedState, state)) {
+      if (!safeEqual(returnedState, options.state)) {
         response.writeHead(400, callbackHeaders("text/plain; charset=utf-8"));
         response.end("Invalid OAuth callback");
         return;
       }
       if (error) {
-        clearTimeout(timeout);
         response.writeHead(400, callbackHeaders("text/plain; charset=utf-8"));
         response.end("WHOOP authorization failed");
-        server.close();
-        reject(new Error("WHOOP authorization failed"));
+        finish(new Error("WHOOP authorization failed"));
         return;
       }
       if (
@@ -275,22 +287,39 @@ export async function authorize(store = new CredentialStore()): Promise<void> {
         response.end("Invalid OAuth callback");
         return;
       }
-      clearTimeout(timeout);
       response.writeHead(200, callbackHeaders("text/html; charset=utf-8"));
       response.end("<h1>WHOOP connected</h1><p>You can close this window.</p>");
-      server.close();
-      resolve(authorizationCode);
+      finish(undefined, authorizationCode);
     });
     server.maxRequestsPerSocket = 20;
-    server.on("error", (error) => {
-      clearTimeout(timeout);
-      reject(error);
-    });
-    server.listen(port, redirect.hostname, () => {
+    server.on("error", (error) => finish(error));
+    server.listen({ port, host: redirect.hostname, exclusive: true }, options.onListening);
+  });
+}
+
+export async function authorize(store = new CredentialStore()): Promise<void> {
+  store.assertPersistentStorageSupported();
+  const existing = await store.load();
+  const clientId =
+    existing.clientId || (await promptText("WHOOP client ID: "));
+  const clientSecret =
+    existing.clientSecret || (await promptSecret("WHOOP client secret: "));
+  if (!clientId || !clientSecret) {
+    throw new Error("WHOOP client ID and client secret are required");
+  }
+  const redirectUri = existing.redirectUri || DEFAULT_REDIRECT_URI;
+  validateLocalRedirectUri(redirectUri);
+  const state = randomBytes(32).toString("base64url");
+  const authorizationUrl = createAuthorizationUrl({ clientId, redirectUri, state });
+
+  const code = await waitForOAuthCallback({
+    redirectUri,
+    state,
+    onListening: () => {
       console.error("Open this URL to authorize WHOOP:");
       console.error(authorizationUrl);
       tryOpenBrowser(authorizationUrl);
-    });
+    },
   });
 
   const tokens = await exchangeCode({ code, clientId, clientSecret, redirectUri });

@@ -24,12 +24,12 @@ npm run security:sbom
 
 1. Strict TypeScript compilation.
 2. Unit and MCP integration tests with synthetic health data.
-3. A real `npm pack` of the exact publishable artifact.
-4. Tarball path allowlisting.
+3. A clean compile followed by direct auditing of both TypeScript source and compiled JavaScript.
+4. A real `npm pack` of the exact publishable artifact, followed by a second runtime audit and byte-for-byte comparison with the audited local `dist`.
 5. Secret and private-path pattern scanning inside every text file in the tarball.
 6. Runtime dependency allowlisting and exact-version enforcement.
 7. Install-lifecycle-script rejection.
-8. Outbound source URL allowlisting.
+8. Outbound source and compiled-runtime URL allowlisting.
 9. Dynamic-code and arbitrary-process-execution rejection.
 10. Verification that all five health tools declare read-only and non-destructive MCP annotations.
 
@@ -68,8 +68,9 @@ The public tests cover these boundaries:
 - OAuth state has at least 256 bits of random input and is compared in constant time.
 - Automatic OAuth callbacks accept loopback HTTP redirect URIs only.
 - Client secrets are entered through a masked prompt.
-- Credential files reject symlinks, multiple hard links, ownership mismatches, and file swaps between path validation and open, then self-heal to mode `0600`; the default parent directory is current-user-owned and created with mode `0700`.
-- Rotating refresh tokens are serialized with a lock and persisted atomically.
+- On Linux and macOS, every credential-path ancestor is checked for symlinks, ownership, and unsafe write permissions. Credential files reject multiple hard links, ownership mismatches, and file swaps, then self-heal to mode `0600`; the direct parent is current-user-owned mode `0700`.
+- Rotating refresh tokens are serialized with a heartbeat lease that does not trust process IDs, then persisted atomically and verified after replacement.
+- Native Windows persistence fails closed because POSIX modes do not enforce Windows ACLs and Node's standard file APIs cannot guarantee reparse-safe writes. Windows supports short-lived access tokens supplied through the process environment only.
 - Persisted rotated tokens take precedence over stale environment bootstrap tokens.
 - WHOOP error bodies are not forwarded into AI-visible error messages.
 - All MCP data tools are read-only, non-destructive, and idempotent. Their open-world access is constrained to WHOOP's API.
@@ -81,6 +82,8 @@ The public tests cover these boundaries:
 
 This project has not undergone a paid independent penetration test, and this document is not a certification. OpenSSF Scorecard, CodeQL, Gitleaks, dependency review, tests, and provenance are independently verifiable evidence, but no scanner proves the absence of every vulnerability.
 
-The client secret and OAuth grant are encrypted only if the user's disk or operating system provides encryption. The package protects the local file with OS permissions, but it does not use a platform keychain. A compromised user account, machine, MCP client, or dependency can still access data available to that process.
+On Linux and macOS, the client secret and OAuth grant are encrypted only if the user's disk or operating system provides encryption. The package protects the local file with POSIX ownership and permissions, but it does not use a platform keychain. A compromised user account, machine, MCP client, or dependency can still access data available to that process.
+
+WHOOP's published OAuth documentation does not currently advertise PKCE parameters. This client therefore uses an exact loopback redirect, a confidential client secret, and 256-bit state validation. PKCE should be added if WHOOP documents support for it. The registered loopback port is fixed by the user's WHOOP application; if another local process already owns that port, authorization fails before an authorization URL is opened. A hostile local process can cause denial of service, but pre-binding alone does not demonstrate authorization-code interception.
 
 Please report suspected vulnerabilities privately as described in [SECURITY.md](SECURITY.md).

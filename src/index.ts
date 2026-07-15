@@ -15,7 +15,10 @@ Usage:
   mcp-server-whoop help        Show this help
 
 Before auth, set WHOOP_CLIENT_ID and WHOOP_CLIENT_SECRET and register
-http://127.0.0.1:8765/callback in the WHOOP Developer Dashboard.`;
+http://127.0.0.1:8765/callback in the WHOOP Developer Dashboard.
+
+Persistent OAuth credentials require Linux, macOS, or WSL.
+Native Windows supports short-lived WHOOP_ACCESS_TOKEN values only.`;
 
 async function serve(): Promise<void> {
   const server = createWhoopServer();
@@ -25,6 +28,12 @@ async function serve(): Promise<void> {
 async function status(): Promise<void> {
   const store = new CredentialStore();
   const credentials = await store.load();
+  if (process.platform === "win32") {
+    console.log("Persistent credentials: disabled on native Windows");
+    console.log(`Environment access token configured: ${Boolean(credentials.accessToken)}`);
+    console.log("Use WSL/Linux/macOS for OAuth and rotating refresh-token persistence.");
+    return;
+  }
   console.log(`Credentials file: ${store.path}`);
   console.log(`Client configured: ${Boolean(credentials.clientId && credentials.clientSecret)}`);
   console.log(`Access token present: ${Boolean(credentials.accessToken)}`);
