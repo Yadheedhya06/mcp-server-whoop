@@ -1,6 +1,7 @@
 {
   "name": "mcp-server-whoop",
-  "version": "0.1.0",
+  "version": "0.1.1",
+  "mcpName": "io.github.Yadheedhya06/mcp-server-whoop",
   "description": "Local-first, read-only WHOOP MCP server with secure OAuth and AI-ready health signals",
   "type": "module",
   "bin": {
@@ -27,7 +28,8 @@
     "README.md",
     "LICENSE",
     "SECURITY.md",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "server.json"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",

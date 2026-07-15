@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented here.
 
+## 0.1.1 - 2026-07-15
+
+- Added package ownership metadata and `server.json` for the official MCP Registry.
+
 ## 0.1.0 - 2026-07-15
 
 - Initial public release.
