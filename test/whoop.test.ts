@@ -1,12 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CredentialStore } from "../src/config.js";
 import { WhoopClient, formatSleep, formatWorkout, localDateTime } from "../src/whoop.js";
 import type { SleepRecord, WorkoutRecord } from "../src/types.js";
 
+const secureTemp = async (prefix: string) =>
+  realpath(await mkdtemp(join(tmpdir(), prefix)));
 const fixedNow = new Date("2026-07-15T09:00:00.000Z");
 
 test("formatSleep returns local signal fields without UTC or raw identifiers", () => {
@@ -51,7 +53,7 @@ test("formatSleep returns local signal fields without UTC or raw identifiers", (
 });
 
 test("WhoopClient refreshes and atomically persists WHOOP token rotation", async () => {
-  const root = await mkdtemp(join(tmpdir(), "whoop-refresh-"));
+  const root = await secureTemp("whoop-refresh-");
   const store = new CredentialStore(join(root, "credentials.json"));
   await store.update({
     clientId: "client-test",
@@ -132,7 +134,7 @@ test("pending sleep is explicit and never contains fabricated score values", () 
 });
 
 test("WhoopClient never forwards WHOOP API response bodies into errors", async () => {
-  const root = await mkdtemp(join(tmpdir(), "whoop-api-error-"));
+  const root = await secureTemp("whoop-api-error-");
   const store = new CredentialStore(join(root, "credentials.json"));
   await store.update({ accessToken: "access-current" });
   const client = new WhoopClient({
@@ -151,7 +153,7 @@ test("WhoopClient never forwards WHOOP API response bodies into errors", async (
 });
 
 test("WhoopClient never forwards token endpoint response bodies into errors", async () => {
-  const root = await mkdtemp(join(tmpdir(), "whoop-token-error-"));
+  const root = await secureTemp("whoop-token-error-");
   const store = new CredentialStore(join(root, "credentials.json"));
   await store.update({
     clientId: "client",
@@ -188,14 +190,14 @@ test("WhoopClient rejects malformed records, oversized bodies, and cyclic pagina
       /response size limit/,
     ],
   ] as const) {
-    const root = await mkdtemp(join(tmpdir(), `whoop-${name}-`));
+    const root = await secureTemp(`whoop-${name}-`);
     const store = new CredentialStore(join(root, "credentials.json"));
     await store.update({ accessToken: "access-current" });
     const client = new WhoopClient({ store, fetchImpl: async () => responseFactory() });
     await assert.rejects(client.recoveries(1), pattern);
   }
 
-  const root = await mkdtemp(join(tmpdir(), "whoop-cycle-page-"));
+  const root = await secureTemp("whoop-cycle-page-");
   const store = new CredentialStore(join(root, "credentials.json"));
   await store.update({ accessToken: "access-current" });
   let calls = 0;
@@ -211,7 +213,7 @@ test("WhoopClient rejects malformed records, oversized bodies, and cyclic pagina
 });
 
 test("WhoopClient cancels a rejected response, rotates once, and retries with the new token", async () => {
-  const root = await mkdtemp(join(tmpdir(), "whoop-401-"));
+  const root = await secureTemp("whoop-401-");
   const store = new CredentialStore(join(root, "credentials.json"));
   await store.update({
     clientId: "client",
@@ -255,7 +257,7 @@ test("WhoopClient cancels a rejected response, rotates once, and retries with th
 });
 
 test("WhoopClient rejects malformed refresh responses before persisting them", async () => {
-  const root = await mkdtemp(join(tmpdir(), "whoop-bad-refresh-"));
+  const root = await secureTemp("whoop-bad-refresh-");
   const store = new CredentialStore(join(root, "credentials.json"));
   await store.update({
     clientId: "client",

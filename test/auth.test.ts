@@ -1,10 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { once } from "node:events";
+import { createServer } from "node:http";
 import {
   AUTHORIZE_URL,
   DEFAULT_SCOPES,
   createAuthorizationUrl,
   validateLocalRedirectUri,
+  waitForOAuthCallback,
 } from "../src/auth.js";
 
 const strongState = "A".repeat(43);
@@ -68,5 +71,31 @@ test("automatic OAuth callback accepts only plain loopback HTTP redirect URIs", 
     "http://127.0.0.1:70000/callback",
   ]) {
     assert.throws(() => validateLocalRedirectUri(uri));
+  }
+});
+
+test("OAuth callback pre-bind fails before authorization is exposed", async () => {
+  const blocker = createServer((_request, response) => response.end("blocked"));
+  blocker.listen(0, "127.0.0.1");
+  await once(blocker, "listening");
+  const address = blocker.address();
+  if (!address || typeof address === "string") throw new Error("Expected an IP listener");
+  let ready = false;
+  try {
+    await assert.rejects(
+      waitForOAuthCallback({
+        redirectUri: `http://127.0.0.1:${address.port}/callback`,
+        state: "state-value",
+        timeoutMs: 1_000,
+        onListening: () => {
+          ready = true;
+        },
+      }),
+      (error: NodeJS.ErrnoException) => error.code === "EADDRINUSE",
+    );
+    assert.equal(ready, false);
+  } finally {
+    blocker.close();
+    await once(blocker, "close");
   }
 });

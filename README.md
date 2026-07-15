@@ -34,14 +34,14 @@ A local-first, read-only [Model Context Protocol](https://modelcontextprotocol.i
 
 1. Create a WHOOP developer application and register `http://127.0.0.1:8765/callback`.
 2. Enable the five read scopes and `offline` listed below.
-3. Run `npx -y mcp-server-whoop@latest auth` in a terminal and approve WHOOP access.
-4. Run `npx -y mcp-server-whoop@latest status` to confirm the local grant exists.
-5. Add the stdio command `npx -y mcp-server-whoop@latest` to your AI client's MCP configuration.
+3. Run `npx -y mcp-server-whoop@0.2.1 auth` in a terminal and approve WHOOP access.
+4. Run `npx -y mcp-server-whoop@0.2.1 status` to confirm the local grant exists.
+5. Add the stdio command `npx -y mcp-server-whoop@0.2.1` to your AI client's MCP configuration.
 6. Restart or reload the client, then ask: `Use WHOOP to summarize my recovery and sleep from the last 7 days.`
 
 The authorization command and the AI client must run as the same operating-system user, or both must set `WHOOP_CREDENTIALS_FILE` to the same private file. The package never asks you to paste WHOOP tokens into an AI conversation.
 
-For reproducible or security-sensitive deployments, replace `@latest` with an exact reviewed version such as `@0.2.0`. `@latest` is convenient but automatically follows future releases.
+The documentation pins an exact reviewed version by default. Use `@latest` only if you explicitly want your client to follow future releases without reviewing them first.
 
 ## 1. Create your WHOOP application
 
@@ -69,7 +69,7 @@ read:body_measurement
 Run:
 
 ```bash
-npx -y mcp-server-whoop@latest auth
+npx -y mcp-server-whoop@0.2.1 auth
 ```
 
 The command prompts for your WHOOP client ID and masks the client secret, opens WHOOP consent in your browser, validates the OAuth state, and saves the resulting grant locally.
@@ -80,7 +80,9 @@ Credentials are stored at:
 ~/.config/mcp-server-whoop/credentials.json
 ```
 
-The directory is forced to mode `0700` and the file to `0600`. Override the path with `WHOOP_CREDENTIALS_FILE` if needed.
+On Linux and macOS, every path ancestor is checked before use, the direct directory is current-user-owned with mode `0700`, and the file is a single-link current-user-owned regular file with mode `0600`. Override the path with `WHOOP_CREDENTIALS_FILE` only when every ancestor is trusted and is not a symlink.
+
+Persistent OAuth credentials intentionally fail closed on native Windows. Node.js file modes do not enforce private Windows ACLs, and its standard file APIs cannot guarantee reparse-safe credential writes. Native Windows users can provide a short-lived `WHOOP_ACCESS_TOKEN` through the MCP process environment, but automatic authorization and refresh-token persistence require WSL, Linux, or macOS until a native credential backend is available.
 
 For headless environments, provide `WHOOP_CLIENT_ID`, `WHOOP_CLIENT_SECRET`, and optionally `WHOOP_REDIRECT_URI` as environment variables before running `auth`.
 
@@ -95,13 +97,13 @@ Then run `auth` in that SSH session and open its printed WHOOP URL in your works
 Check setup without displaying secrets:
 
 ```bash
-npx -y mcp-server-whoop@latest status
+npx -y mcp-server-whoop@0.2.1 status
 ```
 
 Remove the local grant:
 
 ```bash
-npx -y mcp-server-whoop@latest logout
+npx -y mcp-server-whoop@0.2.1 logout
 ```
 
 Revoking access in WHOOP account settings is also recommended when you no longer use an integration.
@@ -117,7 +119,7 @@ Add this under `mcpServers` in Claude Desktop's configuration, then fully restar
   "mcpServers": {
     "whoop": {
       "command": "npx",
-      "args": ["-y", "mcp-server-whoop@latest"]
+      "args": ["-y", "mcp-server-whoop@0.2.1"]
     }
   }
 }
@@ -126,7 +128,7 @@ Add this under `mcpServers` in Claude Desktop's configuration, then fully restar
 ### Claude Code
 
 ```bash
-claude mcp add --transport stdio whoop -- npx -y mcp-server-whoop@latest
+claude mcp add --transport stdio whoop -- npx -y mcp-server-whoop@0.2.1
 ```
 
 ### Cursor, Windsurf, Gemini Code Assist, and other `mcpServers` clients
@@ -138,7 +140,7 @@ Add the server to the client's MCP JSON. Gemini Code Assist uses `~/.gemini/sett
   "mcpServers": {
     "whoop": {
       "command": "npx",
-      "args": ["-y", "mcp-server-whoop@latest"]
+      "args": ["-y", "mcp-server-whoop@0.2.1"]
     }
   }
 }
@@ -154,7 +156,7 @@ Create `.vscode/mcp.json` for a project, or use VS Code's **MCP: Add Server** co
     "whoop": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "mcp-server-whoop@latest"]
+      "args": ["-y", "mcp-server-whoop@0.2.1"]
     }
   }
 }
@@ -165,7 +167,7 @@ Create `.vscode/mcp.json` for a project, or use VS Code's **MCP: Add Server** co
 Either run:
 
 ```bash
-codex mcp add whoop -- npx -y mcp-server-whoop@latest
+codex mcp add whoop -- npx -y mcp-server-whoop@0.2.1
 ```
 
 Or add this to `~/.codex/config.toml`:
@@ -173,7 +175,7 @@ Or add this to `~/.codex/config.toml`:
 ```toml
 [mcp_servers.whoop]
 command = "npx"
-args = ["-y", "mcp-server-whoop@latest"]
+args = ["-y", "mcp-server-whoop@0.2.1"]
 ```
 
 ### ChatGPT
@@ -184,7 +186,7 @@ Client menus and configuration paths change over time. If a client supports stan
 
 ```text
 command: npx
-arguments: -y mcp-server-whoop@latest
+arguments: -y mcp-server-whoop@0.2.1
 ```
 
 ## Confirm the connection
@@ -279,7 +281,7 @@ Client configuration from `WHOOP_CLIENT_ID`, `WHOOP_CLIENT_SECRET`, and `WHOOP_R
 
 ### `Missing WHOOP ...`
 
-Run `npx -y mcp-server-whoop@latest status` as the same OS user that launches the AI client. If the credentials are elsewhere, set `WHOOP_CREDENTIALS_FILE` in the client's MCP environment.
+Run `npx -y mcp-server-whoop@0.2.1 status` as the same OS user that launches the AI client. If the credentials are elsewhere, set `WHOOP_CREDENTIALS_FILE` in the client's MCP environment.
 
 ### WHOOP reports a redirect mismatch
 
@@ -299,7 +301,7 @@ Check the returned `status.state`. If it is `waiting_for_whoop` or `waiting_for_
 
 ### The client shows no tools
 
-Run `npx -y mcp-server-whoop@latest --help` in a terminal to verify Node.js and npm can launch the package, then restart the AI client and inspect its MCP logs. Do not run the bare server interactively to inspect output: stdio is reserved for MCP protocol messages.
+Run `npx -y mcp-server-whoop@0.2.1 --help` in a terminal to verify Node.js and npm can launch the package, then restart the AI client and inspect its MCP logs. Do not run the bare server interactively to inspect output: stdio is reserved for MCP protocol messages.
 
 ## Development
 
@@ -329,10 +331,10 @@ This project publishes evidence rather than claiming that any package is perfect
 - Every user owns their WHOOP developer app and OAuth grant.
 - Credentials stay local and are never returned through MCP tools.
 - The package provides no WHOOP write, generic network, shell, filesystem, or raw API passthrough tool.
-- The credential file and its direct parent are checked against symlinks, unsafe permissions, oversized input, and unexpected fields. Refresh rotation uses a crash-aware lock, exclusive temporary file, atomic replacement, and disk sync.
+- On supported POSIX storage, the credential file and every ancestor are checked against symlinks, unsafe ownership or permissions, oversized input, and unexpected fields. Refresh rotation uses a heartbeat lease that does not trust PIDs, an exclusive temporary file, atomic replacement, post-write verification, and disk sync. Native Windows persistence fails closed.
 - WHOOP and OAuth responses are size-bounded and structurally validated; provider response bodies are never copied into MCP errors.
 - Direct dependencies use exact versions. There are only two direct runtime dependencies and no package install lifecycle scripts.
-- CI runs the test suite on Node 18, 20, 22, and 24, scans the exact npm tarball, verifies npm registry signatures, and generates a CycloneDX SBOM.
+- CI runs the full test suite on Node 18, 20, 22, and 24, adds macOS and Windows platform-security jobs, audits both source and the exact compiled npm runtime, verifies npm registry signatures, and generates a CycloneDX SBOM.
 - Independent workflows run CodeQL, Gitleaks, dependency review, and OpenSSF Scorecard.
 - The publish workflow packs once and publishes that exact tarball through npm Trusted Publishing with Sigstore provenance. GitHub separately attests that tarball against its CycloneDX SBOM; no long-lived npm token is used.
 

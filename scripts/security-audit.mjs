@@ -1,19 +1,22 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
-import { readFileSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const packageJson = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
-const packageLock = JSON.parse(readFileSync(join(root, "package-lock.json"), "utf8"));
 const serverManifest = JSON.parse(readFileSync(join(root, "server.json"), "utf8"));
 const checks = [];
 
 function check(condition, label) {
   if (!condition) throw new Error(`SECURITY AUDIT FAILED: ${label}`);
   checks.push(label);
+}
+
+function readFiles(paths, prefix = "") {
+  return new Map(paths.map((path) => [path, readFileSync(join(root, prefix, path), "utf8")]));
 }
 
 const lifecycleScripts = ["preinstall", "install", "postinstall", "prepare"];
@@ -34,19 +37,6 @@ check(
   ),
   "all direct dependencies use exact versions",
 );
-check(packageLock.lockfileVersion >= 3, "modern package-lock format is required");
-check(
-  Object.entries(packageLock.packages ?? {})
-    .filter(([path, metadata]) => path && metadata.dev !== true)
-    .every(([, metadata]) => !metadata.hasInstallScript),
-  "production dependency graph contains no install scripts",
-);
-check(
-  Object.entries(packageLock.packages ?? {})
-    .filter(([path]) => path)
-    .every(([, metadata]) => typeof metadata.integrity === "string" && metadata.integrity.startsWith("sha512-")),
-  "all locked dependency artifacts have SHA-512 integrity values",
-);
 check(
   packageJson.repository?.url === "git+https://github.com/Yadheedhya06/mcp-server-whoop.git",
   "package repository identity is fixed",
@@ -59,75 +49,100 @@ check(
   "npm and MCP Registry manifests identify the same package version",
 );
 
-const sourceFiles = [
-  "src/auth.ts",
-  "src/config.ts",
-  "src/index.ts",
-  "src/server.ts",
-  "src/types.ts",
-  "src/whoop.ts",
-];
-const sourceByFile = new Map(
-  sourceFiles.map((path) => [path, readFileSync(join(root, path), "utf8")]),
-);
-const source = [...sourceByFile.values()].join("\n");
-const sourceUrls = new Set(source.match(/https:\/\/[^"'`\s)]+/g) ?? []);
+const sourceFiles = ["auth.ts", "config.ts", "index.ts", "server.ts", "types.ts", "whoop.ts"];
+const runtimeFiles = ["auth.js", "config.js", "index.js", "server.js", "types.js", "whoop.js"];
+const declarationFiles = ["auth.d.ts", "config.d.ts", "index.d.ts", "server.d.ts", "types.d.ts", "whoop.d.ts"];
+const sourceCheckout = existsSync(join(root, "src", "config.ts")) && existsSync(join(root, "package-lock.json"));
+
+if (sourceCheckout) {
+  const packageLock = JSON.parse(readFileSync(join(root, "package-lock.json"), "utf8"));
+  check(packageLock.lockfileVersion >= 3, "modern package-lock format is required");
+  check(
+    Object.entries(packageLock.packages ?? {})
+      .filter(([path, metadata]) => path && metadata.dev !== true)
+      .every(([, metadata]) => !metadata.hasInstallScript),
+    "production dependency graph contains no install scripts",
+  );
+  check(
+    Object.entries(packageLock.packages ?? {})
+      .filter(([path]) => path)
+      .every(([, metadata]) => typeof metadata.integrity === "string" && metadata.integrity.startsWith("sha512-")),
+    "all locked dependency artifacts have SHA-512 integrity values",
+  );
+}
+
 const approvedUrls = new Set([
   "https://api.prod.whoop.com/developer/v2",
   "https://api.prod.whoop.com/oauth/oauth2/auth",
   "https://api.prod.whoop.com/oauth/oauth2/token",
 ]);
-check(
-  [...sourceUrls].every((url) => approvedUrls.has(url)),
-  `outbound source URL allowlist (${[...sourceUrls].sort().join(", ")})`,
-);
-check(!/\b(?:eval|Function)\s*\(/.test(source), "no dynamic code evaluation");
-check(!/\b(?:exec|execFile|fork)\s*\(/.test(source), "no shell or arbitrary command execution APIs");
-check(
-  (source.match(/\bspawn\s*\(/g) ?? []).length === 1 &&
-    sourceByFile.get("src/auth.ts")?.includes("[\"open\", [url]]") &&
-    sourceByFile.get("src/auth.ts")?.includes("[\"cmd\", [\"/c\", \"start\", \"\", url]]") &&
-    sourceByFile.get("src/auth.ts")?.includes("[\"xdg-open\", [url]]") &&
-    sourceByFile.get("src/auth.ts")?.includes("shell: false"),
-  "the sole child process call is a shell-disabled browser opener with a fixed command allowlist",
-);
-check(
-  !/read:(?:profile)|write:|delete:|update:|create:/i.test(source),
-  "OAuth and API surface contains no identity or write scope",
-);
-check(
-  (source.match(/method:\s*"POST"/g) ?? []).length === 2 &&
-    sourceByFile.get("src/auth.ts")?.includes("fetch(TOKEN_URL, {") &&
-    sourceByFile.get("src/whoop.ts")?.includes("this.fetchImpl(this.tokenUrl, {"),
-  "POST is restricted to the two OAuth token-exchange paths",
-);
-check(
-  source.includes("O_NOFOLLOW") && source.includes("O_EXCL") && source.includes("handle.sync()"),
-  "credential writes use no-follow, exclusive creation, and fsync primitives",
-);
-check(
-  sourceByFile.get("src/config.ts")?.includes("metadata.uid !== currentUid") &&
-    sourceByFile.get("src/config.ts")?.includes("metadata.nlink !== 1") &&
-    sourceByFile.get("src/config.ts")?.includes("metadata.ino !== pathMetadata.ino"),
-  "credential reads enforce current-user ownership and reject links or file swaps during validation",
-);
-check(
-  source.includes("timingSafeEqual") && source.includes("randomBytes(32)"),
-  "OAuth callbacks use 256-bit state and constant-time state comparison",
-);
 
-const serverSource = sourceByFile.get("src/server.ts");
-check(
-  (serverSource.match(/annotations: readOnlyAnnotations/g) ?? []).length === 5,
-  "all five health tools use the shared security annotation set",
-);
-check(
-  serverSource.includes("readOnlyHint: true") &&
-    serverSource.includes("destructiveHint: false") &&
-    serverSource.includes("idempotentHint: true") &&
-    serverSource.includes("openWorldHint: true"),
-  "security annotations declare read-only, non-destructive, idempotent WHOOP access",
-);
+function auditProgram(files, label) {
+  const program = [...files.values()].join("\n");
+  const urls = new Set(program.match(/https:\/\/[^"'`\s)]+/g) ?? []);
+  check(
+    [...urls].every((url) => approvedUrls.has(url)),
+    `${label} outbound URL allowlist (${[...urls].sort().join(", ")})`,
+  );
+  check(!/\b(?:eval|Function)\s*\(/.test(program), `${label} contains no dynamic code evaluation`);
+  check(!/\b(?:exec|execFile|fork)\s*\(/.test(program), `${label} contains no shell or arbitrary command execution APIs`);
+  check(
+    (program.match(/\bspawn\s*\(/g) ?? []).length === 1 &&
+      files.get(label === "source" ? "auth.ts" : "auth.js")?.includes("[\"open\", [url]]") &&
+      files.get(label === "source" ? "auth.ts" : "auth.js")?.includes("[\"cmd\", [\"/c\", \"start\", \"\", url]]") &&
+      files.get(label === "source" ? "auth.ts" : "auth.js")?.includes("[\"xdg-open\", [url]]") &&
+      files.get(label === "source" ? "auth.ts" : "auth.js")?.includes("shell: false"),
+    `${label} sole child process call is a shell-disabled browser opener with fixed commands`,
+  );
+  check(
+    !/read:(?:profile)|write:|delete:|update:|create:/i.test(program),
+    `${label} OAuth and API surface contains no identity or write scope`,
+  );
+  check(
+    (program.match(/method:\s*"POST"/g) ?? []).length === 2,
+    `${label} POST surface is restricted to two OAuth token paths`,
+  );
+  check(
+    program.includes("O_NOFOLLOW") &&
+      program.includes("O_EXCL") &&
+      program.includes("handle.sync()"),
+    `${label} credential writes use no-follow, exclusive creation, and fsync`,
+  );
+  check(
+    program.includes("credential persistence is disabled on native Windows") &&
+      program.includes("pathSegments") &&
+      program.includes("lease-v1:") &&
+      !program.includes("process.kill"),
+    `${label} fails closed on Windows, validates ancestors, and uses PID-independent lock leases`,
+  );
+  check(
+    program.includes("timingSafeEqual") && program.includes("randomBytes(32)"),
+    `${label} OAuth callbacks use 256-bit state and constant-time comparison`,
+  );
+
+  const server = files.get(label === "source" ? "server.ts" : "server.js") ?? "";
+  check(
+    (server.match(/annotations:\s*readOnlyAnnotations/g) ?? []).length === 5,
+    `${label} has exactly five health tools sharing security annotations`,
+  );
+  check(
+    server.includes("readOnlyHint: true") &&
+      server.includes("destructiveHint: false") &&
+      server.includes("idempotentHint: true") &&
+      server.includes("openWorldHint: true"),
+    `${label} annotations are read-only, non-destructive, and idempotent`,
+  );
+}
+
+if (sourceCheckout) {
+  auditProgram(readFiles(sourceFiles, "src"), "source");
+}
+
+for (const path of [...runtimeFiles, ...declarationFiles]) {
+  check(existsSync(join(root, "dist", path)), `compiled artifact exists: dist/${path}`);
+}
+const localRuntime = readFiles(runtimeFiles, "dist");
+auditProgram(localRuntime, "compiled runtime");
 
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
 const packOutput = execFileSync(npm, ["pack", "--ignore-scripts", "--json"], {
@@ -155,10 +170,12 @@ try {
     "package/package.json",
     "package/scripts/security-audit.mjs",
     "package/server.json",
+    ...runtimeFiles.map((path) => `package/dist/${path}`),
+    ...declarationFiles.map((path) => `package/dist/${path}`),
   ]);
   check(
-    listing.every((path) => path.startsWith("package/dist/") || allowedExact.has(path)),
-    "npm tarball contains only the documented runtime allowlist",
+    listing.length === allowedExact.size && listing.every((path) => allowedExact.has(path)),
+    "npm tarball exactly matches the documented file allowlist",
   );
   check(
     listing.every((path) => path.startsWith("package/") && !path.split("/").includes("..")),
@@ -182,6 +199,7 @@ try {
     /(?:[A-Za-z]:\\Users\\|\/home\/)[^\s"']+/g,
   ];
   const decoder = new TextDecoder("utf-8", { fatal: true });
+  const packedText = new Map();
   for (const path of listing) {
     const contents = execFileSync("tar", ["-xOf", tarballPath, path]);
     if (contents.includes(0)) continue;
@@ -191,6 +209,7 @@ try {
     } catch {
       throw new Error(`SECURITY AUDIT FAILED: non-UTF-8 text artifact ${path}`);
     }
+    packedText.set(path, text);
     for (const pattern of secretPatterns) {
       pattern.lastIndex = 0;
       check(!pattern.test(text), `no secret/private-path pattern in ${path}`);
@@ -205,9 +224,18 @@ try {
     );
   }
 
-  const packedManifest = JSON.parse(
-    execFileSync("tar", ["-xOf", tarballPath, "package/package.json"], { encoding: "utf8" }),
+  const packedRuntime = new Map(
+    runtimeFiles.map((path) => [path, packedText.get(`package/dist/${path}`)]),
   );
+  auditProgram(packedRuntime, "packed runtime");
+  for (const path of runtimeFiles) {
+    check(
+      packedRuntime.get(path) === localRuntime.get(path),
+      `packed runtime is byte-identical to audited dist/${path}`,
+    );
+  }
+
+  const packedManifest = JSON.parse(packedText.get("package/package.json"));
   check(
     packedManifest.name === packageJson.name && packedManifest.version === packageJson.version,
     "packed npm identity matches the audited source manifest",
@@ -223,4 +251,4 @@ try {
   rmSync(tarballPath, { force: true });
 }
 
-console.log(`Security audit passed: ${checks.length} reproducible checks`);
+console.log(`Security audit passed: ${checks.length} reproducible checks${sourceCheckout ? " from source and shipped runtime" : " against the shipped runtime"}`);
