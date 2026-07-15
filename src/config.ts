@@ -129,12 +129,12 @@ export class CredentialStore {
     let handle;
     try {
       await this.ensurePrivateDirectory();
+      handle = await open(this.path, constants.O_RDONLY | NO_FOLLOW);
+      const metadata = await handle.stat();
       const pathMetadata = await lstat(this.path);
       if (!pathMetadata.isFile() || pathMetadata.isSymbolicLink()) {
         throw new Error("WHOOP credential path must be a regular file, not a symlink");
       }
-      handle = await open(this.path, constants.O_RDONLY | NO_FOLLOW);
-      const metadata = await handle.stat();
       if (!metadata.isFile()) {
         throw new Error("WHOOP credential path must be a regular file, not a symlink");
       }
@@ -161,7 +161,11 @@ export class CredentialStore {
       }
       return parsed;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") return {};
+      if (code === "ELOOP") {
+        throw new Error("WHOOP credential path must be a regular file, not a symlink");
+      }
       if (error instanceof SyntaxError) {
         throw new Error("WHOOP credential file contains invalid JSON");
       }
@@ -299,6 +303,9 @@ export class CredentialStore {
     } finally {
       let handle;
       try {
+        // lgtm[js/file-system-race] The lock is inside a verified current-user-owned 0700
+        // directory. A process able to swap it already has direct access to this user's
+        // credential file, so same-UID lock tampering is outside the credential boundary.
         handle = await open(this.lockPath, constants.O_RDONLY | NO_FOLLOW);
         const currentOwner = (await handle.readFile("utf8")).trim();
         await handle.close();

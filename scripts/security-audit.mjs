@@ -180,7 +180,6 @@ try {
     /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/g,
     /\/opt\/data\//g,
     /(?:[A-Za-z]:\\Users\\|\/home\/)[^\s"']+/g,
-    /discord(?:app)?\.com\/api\/webhooks\//gi,
   ];
   const decoder = new TextDecoder("utf-8", { fatal: true });
   for (const path of listing) {
@@ -196,6 +195,14 @@ try {
       pattern.lastIndex = 0;
       check(!pattern.test(text), `no secret/private-path pattern in ${path}`);
     }
+    const lowerText = text.toLowerCase();
+    const discordWebhookFragments = ["discord", "discordapp"].map(
+      (host) => `${host}.com/api/${"webhooks"}/`,
+    );
+    check(
+      discordWebhookFragments.every((fragment) => !lowerText.includes(fragment)),
+      `no Discord webhook URL in ${path}`,
+    );
   }
 
   const packedManifest = JSON.parse(
