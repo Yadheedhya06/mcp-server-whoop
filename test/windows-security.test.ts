@@ -15,15 +15,15 @@ windowsOnly("Windows allows environment-only access tokens but fails closed for 
     assert.equal((await store.load()).accessToken, "short-lived-access-token");
     assert.throws(
       () => store.assertPersistentStorageSupported(),
-      /credential persistence is disabled on Windows/,
+      /credential persistence is disabled on native Windows/,
     );
     await assert.rejects(
       store.update({ refreshToken: "must-not-persist" }),
-      /credential persistence is disabled on Windows/,
+      /credential persistence is disabled on native Windows/,
     );
     await assert.rejects(
       store.withLock(async () => "must-not-run"),
-      /credential persistence is disabled on Windows/,
+      /credential persistence is disabled on native Windows/,
     );
   } finally {
     if (previous === undefined) delete process.env[accessKey];

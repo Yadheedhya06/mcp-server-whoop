@@ -144,12 +144,17 @@ for (const path of [...runtimeFiles, ...declarationFiles]) {
 const localRuntime = readFiles(runtimeFiles, "dist");
 auditProgram(localRuntime, "compiled runtime");
 
-const npm = process.platform === "win32" ? "npm.cmd" : "npm";
-const packOutput = execFileSync(npm, ["pack", "--ignore-scripts", "--json"], {
-  cwd: root,
-  encoding: "utf8",
-  stdio: ["ignore", "pipe", "pipe"],
-});
+const packArguments = ["pack", "--ignore-scripts", "--json"];
+const npmExecPath = process.env.npm_execpath;
+const packOutput = execFileSync(
+  npmExecPath ? process.execPath : "npm",
+  npmExecPath ? [npmExecPath, ...packArguments] : packArguments,
+  {
+    cwd: root,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  },
+);
 const packed = JSON.parse(packOutput)[0];
 const tarballPath = join(root, packed.filename);
 
