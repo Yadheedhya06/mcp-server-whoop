@@ -99,7 +99,7 @@ export function createWhoopServer(client = new WhoopClient()): McpServer {
     {
       title: "Get latest WHOOP overview",
       description:
-        "Compact local-time coaching overview with newest sleep status, matching current recovery only when ready, current strain, latest workout, recent activity types, and body measurement.",
+        "Compact local-time coaching overview with newest sleep status, matching current recovery only when ready, finalized strain or explicitly provisional live current-cycle strain, latest workout, recent activity types, and body measurement.",
       inputSchema: {},
       outputSchema: {
         status: recordSchema,
@@ -182,7 +182,7 @@ export function createWhoopServer(client = new WhoopClient()): McpServer {
     {
       title: "Get WHOOP recovery history",
       description:
-        "Recent recovery score, HRV, resting heart rate, SpO2, skin temperature, local wake time, and processing state.",
+        "Recent recovery processing state and, only when WHOOP marks a record SCORED, recovery score, HRV, resting heart rate, SpO2, and skin temperature.",
       inputSchema: rangeInput,
       outputSchema: listOutput,
       annotations: readOnlyAnnotations,
@@ -206,7 +206,7 @@ export function createWhoopServer(client = new WhoopClient()): McpServer {
     {
       title: "Get WHOOP sleep history",
       description:
-        "Recent local bedtime/wake time, sleep or nap type, processing state, duration, stages, performance, efficiency, consistency, and respiratory rate.",
+        "Recent local bedtime/wake time, sleep or nap type, processing state, and finalized sleep metrics only when WHOOP marks a record SCORED.",
       inputSchema: {
         ...rangeInput,
         include_naps: z
@@ -232,7 +232,7 @@ export function createWhoopServer(client = new WhoopClient()): McpServer {
     {
       title: "Get WHOOP cycle strain history",
       description:
-        "Recent local physiological-cycle signals with strain, calories, average/max heart rate, processing state, and current-cycle status.",
+        "Recent local physiological-cycle processing state and finalized metrics for SCORED records; a PENDING_SCORE current cycle may expose only provisional_strain.",
       inputSchema: rangeInput,
       outputSchema: listOutput,
       annotations: readOnlyAnnotations,
@@ -251,7 +251,7 @@ export function createWhoopServer(client = new WhoopClient()): McpServer {
     {
       title: "Get WHOOP workout history",
       description:
-        "Recent workout sport, local time, duration, strain, average/max heart rate, calories, HR coverage, distance, zones, and processing state.",
+        "Recent workout sport, local time, duration, and processing state, with score-derived metrics only when WHOOP marks a record SCORED.",
       inputSchema: rangeInput,
       outputSchema: listOutput,
       annotations: readOnlyAnnotations,

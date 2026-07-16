@@ -4,8 +4,20 @@ import { mkdtemp, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CredentialStore } from "../src/config.js";
-import { WhoopClient, formatSleep, formatWorkout, localDateTime } from "../src/whoop.js";
-import type { SleepRecord, WorkoutRecord } from "../src/types.js";
+import {
+  WhoopClient,
+  formatCycle,
+  formatRecovery,
+  formatSleep,
+  formatWorkout,
+  localDateTime,
+} from "../src/whoop.js";
+import type {
+  CycleRecord,
+  RecoveryRecord,
+  SleepRecord,
+  WorkoutRecord,
+} from "../src/types.js";
 
 const secureTemp = async (prefix: string) =>
   realpath(await mkdtemp(join(tmpdir(), prefix)));
@@ -125,12 +137,179 @@ test("pending sleep is explicit and never contains fabricated score values", () 
     timezone_offset: "+04:00",
     nap: false,
     score_state: "PENDING_SCORE",
+    score: {
+      stage_summary: {
+        total_in_bed_time_milli: 4 * 3_600_000,
+        total_awake_time_milli: 30 * 60_000,
+        total_no_data_time_milli: 0,
+        total_light_sleep_time_milli: 2 * 3_600_000,
+        total_slow_wave_sleep_time_milli: 45 * 60_000,
+        total_rem_sleep_time_milli: 45 * 60_000,
+        sleep_cycle_count: 2,
+        disturbance_count: 3,
+      },
+      sleep_needed: {
+        baseline_milli: 8 * 3_600_000,
+        need_from_sleep_debt_milli: 0,
+        need_from_recent_strain_milli: 0,
+        need_from_recent_nap_milli: 0,
+      },
+      sleep_performance_percentage: 44,
+      sleep_efficiency_percentage: 88,
+      sleep_consistency_percentage: 77,
+      respiratory_rate: 16,
+    },
   };
   const formatted = formatSleep(pending);
   assert.equal(formatted.processing_status, "processing");
-  assert.equal("actual_sleep_hours" in formatted, false);
-  assert.equal("sleep_performance_percent" in formatted, false);
+  for (const field of [
+    "actual_sleep_hours",
+    "time_in_bed_hours",
+    "awake_hours",
+    "light_sleep_hours",
+    "slow_wave_sleep_hours",
+    "rem_sleep_hours",
+    "sleep_performance_percent",
+    "sleep_efficiency_percent",
+    "sleep_consistency_percent",
+    "respiratory_rate",
+    "disturbances",
+    "sleep_cycles",
+    "sleep_needed_hours",
+  ]) {
+    assert.equal(field in formatted, false, `${field} must be excluded while pending`);
+  }
   assert.doesNotMatch(JSON.stringify(formatted), /pending-private-id/);
+});
+
+test("non-SCORED records never expose finalized score-derived metrics", () => {
+  const states = ["PENDING_SCORE", "UNSCORABLE", "FUTURE_STATE"] as const;
+  for (const scoreState of states) {
+    const recovery: RecoveryRecord = {
+      cycle_id: 2,
+      sleep_id: "private-sleep-id",
+      created_at: fixedNow.toISOString(),
+      updated_at: fixedNow.toISOString(),
+      score_state: scoreState,
+      score: {
+        user_calibrating: false,
+        recovery_score: 77,
+        resting_heart_rate: 52,
+        hrv_rmssd_milli: 65,
+        spo2_percentage: 98,
+        skin_temp_celsius: 34,
+      },
+    };
+    const recoveryOutput = formatRecovery(recovery);
+    for (const field of [
+      "recovery_score_percent",
+      "hrv_rmssd_ms",
+      "resting_heart_rate_bpm",
+      "spo2_percent",
+      "skin_temperature_celsius",
+      "user_calibrating",
+    ]) {
+      assert.equal(field in recoveryOutput, false, `${field} must be excluded for ${scoreState}`);
+    }
+
+    const completedCycle: CycleRecord = {
+      id: 2,
+      created_at: fixedNow.toISOString(),
+      updated_at: fixedNow.toISOString(),
+      start: "2026-07-14T08:00:00.000Z",
+      end: "2026-07-15T08:00:00.000Z",
+      timezone_offset: "+04:00",
+      score_state: scoreState,
+      score: {
+        strain: 18,
+        kilojoule: 2_000,
+        average_heart_rate: 80,
+        max_heart_rate: 170,
+      },
+    };
+    const cycleOutput = formatCycle(completedCycle);
+    for (const field of [
+      "strain",
+      "provisional_strain",
+      "calories_kcal",
+      "average_heart_rate_bpm",
+      "max_heart_rate_bpm",
+    ]) {
+      assert.equal(field in cycleOutput, false, `${field} must be excluded for ${scoreState}`);
+    }
+
+    const workout: WorkoutRecord = {
+      id: "private-workout-id",
+      created_at: fixedNow.toISOString(),
+      updated_at: fixedNow.toISOString(),
+      start: "2026-07-15T07:00:00.000Z",
+      end: "2026-07-15T08:00:00.000Z",
+      timezone_offset: "+04:00",
+      sport_name: "Running",
+      score_state: scoreState,
+      score: {
+        strain: 15,
+        average_heart_rate: 140,
+        max_heart_rate: 180,
+        kilojoule: 2_000,
+        percent_recorded: 90,
+        distance_meter: 10_000,
+        zone_durations: {
+          zone_zero_milli: 0,
+          zone_one_milli: 600_000,
+          zone_two_milli: 600_000,
+          zone_three_milli: 600_000,
+          zone_four_milli: 600_000,
+          zone_five_milli: 600_000,
+        },
+      },
+    };
+    const workoutOutput = formatWorkout(workout);
+    assert.equal(workoutOutput.duration_minutes, 60);
+    for (const field of [
+      "strain",
+      "average_heart_rate_bpm",
+      "max_heart_rate_bpm",
+      "calories_kcal",
+      "heart_rate_data_recorded_percent",
+      "distance_meters",
+      "heart_rate_zone_minutes",
+    ]) {
+      assert.equal(field in workoutOutput, false, `${field} must be excluded for ${scoreState}`);
+    }
+  }
+});
+
+test("active pending cycle exposes only explicitly provisional strain", () => {
+  const currentCycle: CycleRecord = {
+    id: 3,
+    created_at: fixedNow.toISOString(),
+    updated_at: fixedNow.toISOString(),
+    start: "2026-07-15T08:00:00.000Z",
+    timezone_offset: "+04:00",
+    score_state: "PENDING_SCORE",
+    score: {
+      strain: 20.5,
+      kilojoule: 4_000,
+      average_heart_rate: 90,
+      max_heart_rate: 180,
+    },
+  };
+  const formatted = formatCycle(currentCycle);
+  assert.equal(formatted.processing_status, "processing");
+  assert.equal(formatted.is_current_cycle, true);
+  assert.equal(formatted.provisional_strain, 20.5);
+  for (const field of [
+    "strain",
+    "calories_kcal",
+    "average_heart_rate_bpm",
+    "max_heart_rate_bpm",
+  ]) {
+    assert.equal(field in formatted, false, `${field} must not look finalized`);
+  }
+
+  const unscorable = formatCycle({ ...currentCycle, score_state: "UNSCORABLE" });
+  assert.equal("provisional_strain" in unscorable, false);
 });
 
 test("WhoopClient never forwards WHOOP API response bodies into errors", async () => {
