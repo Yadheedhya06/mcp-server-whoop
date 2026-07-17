@@ -77,6 +77,7 @@ The public tests cover these boundaries:
 - Tool output excludes OAuth secrets, WHOOP record IDs, and raw UTC timestamps.
 - Historical timestamps use each WHOOP record's own offset.
 - Pending sleep never causes an older recovery to be presented as current.
+- Recovery, sleep, cycle, and workout score-derived metrics are emitted only for `SCORED` records. The sole explicit exception is `provisional_strain` from an active `PENDING_SCORE` cycle, which is kept separate from finalized `strain`.
 
 ## Honest limitations
 

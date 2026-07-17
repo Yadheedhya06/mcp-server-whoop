@@ -174,6 +174,10 @@ function scoreStatus(
   return "unknown";
 }
 
+function finalizedScore<T>(scoreState: string, score: T | undefined): T | undefined {
+  return scoreState === "SCORED" ? score : undefined;
+}
+
 function offsetMinutes(offset: string): number | undefined {
   if (offset === "Z") return 0;
   const match = offset.match(/^([+-])(\d{2}):(\d{2})$/);
@@ -409,7 +413,7 @@ export class WhoopClient {
 }
 
 export function formatRecovery(record: RecoveryRecord, sleep?: SleepRecord) {
-  const score = record.score;
+  const score = finalizedScore(record.score_state, record.score);
   return pickDefined({
     date_local: sleep ? localDate(sleep.end, sleep.timezone_offset) : undefined,
     wake_time_local: sleep
@@ -427,7 +431,7 @@ export function formatRecovery(record: RecoveryRecord, sleep?: SleepRecord) {
 }
 
 export function formatSleep(record: SleepRecord) {
-  const score = record.score;
+  const score = finalizedScore(record.score_state, record.score);
   const stages = score?.stage_summary;
   const sleepParts = stages
     ? [
@@ -478,7 +482,13 @@ export function formatSleep(record: SleepRecord) {
 }
 
 export function formatCycle(record: CycleRecord) {
-  const score = record.score;
+  const score = finalizedScore(record.score_state, record.score);
+  // WHOOP updates active-cycle strain before final scoring. Keep that live value
+  // separate so consumers cannot mistake it for finalized cycle strain.
+  const provisionalStrain =
+    record.score_state === "PENDING_SCORE" && !record.end
+      ? finiteBetween(record.score?.strain, 0, 21)
+      : undefined;
   return pickDefined({
     activity_type: "physiological_cycle",
     date_local: localDate(record.start, record.timezone_offset),
@@ -486,6 +496,7 @@ export function formatCycle(record: CycleRecord) {
     end_local: localDateTime(record.end, record.timezone_offset),
     processing_status: scoreStatus(record.score_state),
     strain: finiteBetween(score?.strain, 0, 21),
+    provisional_strain: provisionalStrain,
     calories_kcal: asKilocalories(score?.kilojoule),
     average_heart_rate_bpm: finiteBetween(score?.average_heart_rate, 1, 300),
     max_heart_rate_bpm: finiteBetween(score?.max_heart_rate, 1, 300),
@@ -494,7 +505,7 @@ export function formatCycle(record: CycleRecord) {
 }
 
 export function formatWorkout(record: WorkoutRecord) {
-  const score = record.score;
+  const score = finalizedScore(record.score_state, record.score);
   const parsedDuration = Date.parse(record.end) - Date.parse(record.start);
   const durationMs = Number.isFinite(parsedDuration) && parsedDuration >= 0
     ? parsedDuration

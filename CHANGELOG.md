@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented here.
 
+## 0.2.2 - 2026-07-16
+
+### Correctness
+
+- Suppresses recovery, sleep, cycle, and workout score-derived metrics unless WHOOP marks the record `SCORED`.
+- Preserves live strain from an active `PENDING_SCORE` cycle only as explicitly labeled `provisional_strain`.
+
 ## 0.2.1 - 2026-07-16
 
 ### Security

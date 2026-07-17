@@ -1,6 +1,6 @@
 {
   "name": "mcp-server-whoop",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "mcpName": "io.github.Yadheedhya06/mcp-server-whoop",
   "description": "Local-first, read-only WHOOP MCP server with secure OAuth and AI-ready health signals",
   "type": "module",

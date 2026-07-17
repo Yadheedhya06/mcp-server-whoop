@@ -16,6 +16,7 @@ A local-first, read-only [Model Context Protocol](https://modelcontextprotocol.i
 - Five focused read-only tools instead of a noisy API dump
 - Per-record local timestamps, so travel does not shift sleep or workout dates
 - Explicit `processing` status, with no older recovery substituted while a new sleep is pending
+- Score-derived metrics appear only for `SCORED` records; live current-cycle strain is labeled `provisional_strain`
 - Human-scale hours, minutes, calories, and heart-rate-zone minutes
 - No raw identifiers, OAuth secrets, or raw continuous heart-rate claims in tool output
 - No hosted relay, telemetry, database, generic HTTP tool, raw SQL, or install lifecycle scripts
@@ -34,9 +35,9 @@ A local-first, read-only [Model Context Protocol](https://modelcontextprotocol.i
 
 1. Create a WHOOP developer application and register `http://127.0.0.1:8765/callback`.
 2. Enable the five read scopes and `offline` listed below.
-3. Run `npx -y mcp-server-whoop@0.2.1 auth` in a terminal and approve WHOOP access.
-4. Run `npx -y mcp-server-whoop@0.2.1 status` to confirm the local grant exists.
-5. Add the stdio command `npx -y mcp-server-whoop@0.2.1` to your AI client's MCP configuration.
+3. Run `npx -y mcp-server-whoop@0.2.2 auth` in a terminal and approve WHOOP access.
+4. Run `npx -y mcp-server-whoop@0.2.2 status` to confirm the local grant exists.
+5. Add the stdio command `npx -y mcp-server-whoop@0.2.2` to your AI client's MCP configuration.
 6. Restart or reload the client, then ask: `Use WHOOP to summarize my recovery and sleep from the last 7 days.`
 
 The authorization command and the AI client must run as the same operating-system user, or both must set `WHOOP_CREDENTIALS_FILE` to the same private file. The package never asks you to paste WHOOP tokens into an AI conversation.
@@ -69,7 +70,7 @@ read:body_measurement
 Run:
 
 ```bash
-npx -y mcp-server-whoop@0.2.1 auth
+npx -y mcp-server-whoop@0.2.2 auth
 ```
 
 The command prompts for your WHOOP client ID and masks the client secret, opens WHOOP consent in your browser, validates the OAuth state, and saves the resulting grant locally.
@@ -97,13 +98,13 @@ Then run `auth` in that SSH session and open its printed WHOOP URL in your works
 Check setup without displaying secrets:
 
 ```bash
-npx -y mcp-server-whoop@0.2.1 status
+npx -y mcp-server-whoop@0.2.2 status
 ```
 
 Remove the local grant:
 
 ```bash
-npx -y mcp-server-whoop@0.2.1 logout
+npx -y mcp-server-whoop@0.2.2 logout
 ```
 
 Revoking access in WHOOP account settings is also recommended when you no longer use an integration.
@@ -119,7 +120,7 @@ Add this under `mcpServers` in Claude Desktop's configuration, then fully restar
   "mcpServers": {
     "whoop": {
       "command": "npx",
-      "args": ["-y", "mcp-server-whoop@0.2.1"]
+      "args": ["-y", "mcp-server-whoop@0.2.2"]
     }
   }
 }
@@ -128,7 +129,7 @@ Add this under `mcpServers` in Claude Desktop's configuration, then fully restar
 ### Claude Code
 
 ```bash
-claude mcp add --transport stdio whoop -- npx -y mcp-server-whoop@0.2.1
+claude mcp add --transport stdio whoop -- npx -y mcp-server-whoop@0.2.2
 ```
 
 ### Cursor, Windsurf, Gemini Code Assist, and other `mcpServers` clients
@@ -140,7 +141,7 @@ Add the server to the client's MCP JSON. Gemini Code Assist uses `~/.gemini/sett
   "mcpServers": {
     "whoop": {
       "command": "npx",
-      "args": ["-y", "mcp-server-whoop@0.2.1"]
+      "args": ["-y", "mcp-server-whoop@0.2.2"]
     }
   }
 }
@@ -156,7 +157,7 @@ Create `.vscode/mcp.json` for a project, or use VS Code's **MCP: Add Server** co
     "whoop": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "mcp-server-whoop@0.2.1"]
+      "args": ["-y", "mcp-server-whoop@0.2.2"]
     }
   }
 }
@@ -167,7 +168,7 @@ Create `.vscode/mcp.json` for a project, or use VS Code's **MCP: Add Server** co
 Either run:
 
 ```bash
-codex mcp add whoop -- npx -y mcp-server-whoop@0.2.1
+codex mcp add whoop -- npx -y mcp-server-whoop@0.2.2
 ```
 
 Or add this to `~/.codex/config.toml`:
@@ -175,7 +176,7 @@ Or add this to `~/.codex/config.toml`:
 ```toml
 [mcp_servers.whoop]
 command = "npx"
-args = ["-y", "mcp-server-whoop@0.2.1"]
+args = ["-y", "mcp-server-whoop@0.2.2"]
 ```
 
 ### ChatGPT
@@ -186,7 +187,7 @@ Client menus and configuration paths change over time. If a client supports stan
 
 ```text
 command: npx
-arguments: -y mcp-server-whoop@0.2.1
+arguments: -y mcp-server-whoop@0.2.2
 ```
 
 ## Confirm the connection
@@ -281,7 +282,7 @@ Client configuration from `WHOOP_CLIENT_ID`, `WHOOP_CLIENT_SECRET`, and `WHOOP_R
 
 ### `Missing WHOOP ...`
 
-Run `npx -y mcp-server-whoop@0.2.1 status` as the same OS user that launches the AI client. If the credentials are elsewhere, set `WHOOP_CREDENTIALS_FILE` in the client's MCP environment.
+Run `npx -y mcp-server-whoop@0.2.2 status` as the same OS user that launches the AI client. If the credentials are elsewhere, set `WHOOP_CREDENTIALS_FILE` in the client's MCP environment.
 
 ### WHOOP reports a redirect mismatch
 
@@ -301,7 +302,7 @@ Check the returned `status.state`. If it is `waiting_for_whoop` or `waiting_for_
 
 ### The client shows no tools
 
-Run `npx -y mcp-server-whoop@0.2.1 --help` in a terminal to verify Node.js and npm can launch the package, then restart the AI client and inspect its MCP logs. Do not run the bare server interactively to inspect output: stdio is reserved for MCP protocol messages.
+Run `npx -y mcp-server-whoop@0.2.2 --help` in a terminal to verify Node.js and npm can launch the package, then restart the AI client and inspect its MCP logs. Do not run the bare server interactively to inspect output: stdio is reserved for MCP protocol messages.
 
 ## Development
 
